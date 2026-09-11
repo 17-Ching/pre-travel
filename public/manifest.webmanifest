@@ -1,0 +1,10 @@
+{
+  "name": "行前清單",
+  "short_name": "行前清單",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3d9b8",
+  "theme_color": "#e09f3e",
+  "lang": "zh-Hant",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -1,0 +1,244 @@
+@import "tailwindcss";
+
+/* ───────────────────────────────────────────────────────────
+   Tokens. Semantic names, two value sets.
+   --accent = 行動（#E09F3E）。--tint = 結構（淺色 #78A699 / 深色 #335C67）。
+   本專案不追求 WCAG AA，色值以指定色為準。
+   淺色背景 #F3D9B8、卡片近白 → 卡片才浮得起來。
+   三態切換：無 data-theme = 跟隨系統；data-theme="light|dark" = 手動。
+   ─────────────────────────────────────────────────────────── */
+:root {
+  --surface: #f3d9b8;
+  --surface-2: #eed0a4;
+  --card: #fffcf6;
+  --ink: #22332e;
+  --muted: #6b7c74;
+  --line: #e2c8a2;
+  --accent: #e09f3e;      /* 指定色，不壓深 */
+  --accent-fg: #3a2708;   /* 琥珀底上的深字 */
+  --accent-soft: #fbebd2;
+  --tint: #78a699;        /* 指定色 */
+  --tint-fg: #ffffff;
+  --tint-soft: #dfebe5;
+  --hero: #78a699;        /* 登入頁的大色塊，兩個模式各自一個值 */
+  --danger: #a3231a;
+  --tag-bg: 14%;
+  --elev-1: 0 1px 2px rgb(34 51 46 / 0.06), 0 6px 20px -8px rgb(34 51 46 / 0.18);
+  --elev-2: 0 2px 4px rgb(34 51 46 / 0.08), 0 14px 32px -10px rgb(34 51 46 / 0.28);
+}
+
+/* 深色值：只覆寫 token，其他規則共用 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface: #141f1e;
+    --surface-2: #1a2827;
+    --card: #24373a;
+    --ink: #ede3d4;
+    --muted: #9fb2ae;
+    --line: #34494d;
+    --accent: #e09f3e;
+    --accent-fg: #1b2529;
+    --accent-soft: #3c2f1b;
+    --tint: #8fbac5;      /* #335C67 提亮，才能當 tint-soft 上的文字色 */
+    --tint-fg: #10201f;
+    --tint-soft: #335c67; /* 指定色，深色模式的結構填色 */
+    --hero: #335c67;
+    --danger: #f08a80;
+    --tag-bg: 26%;
+    --elev-1: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 20px -8px rgb(0 0 0 / 0.6);
+    --elev-2: 0 2px 4px rgb(0 0 0 / 0.5), 0 14px 32px -10px rgb(0 0 0 / 0.7);
+  }
+}
+:root[data-theme="dark"] {
+  --surface: #141f1e;
+  --surface-2: #1a2827;
+  --card: #24373a;
+  --ink: #ede3d4;
+  --muted: #9fb2ae;
+  --line: #34494d;
+  --accent: #e09f3e;
+  --accent-fg: #1b2529;
+  --accent-soft: #3c2f1b;
+  --tint: #8fbac5;
+  --tint-fg: #10201f;
+  --tint-soft: #335c67;
+  --hero: #335c67;
+  --danger: #f08a80;
+  --tag-bg: 26%;
+  --elev-1: 0 1px 2px rgb(0 0 0 / 0.4), 0 6px 20px -8px rgb(0 0 0 / 0.6);
+  --elev-2: 0 2px 4px rgb(0 0 0 / 0.5), 0 14px 32px -10px rgb(0 0 0 / 0.7);
+}
+
+@theme inline {
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-tint: var(--tint);
+  --color-tint-fg: var(--tint-fg);
+  --color-tint-soft: var(--tint-soft);
+  --color-danger: var(--danger);
+  --color-hero: var(--hero);
+  --shadow-e1: var(--elev-1);
+  --shadow-e2: var(--elev-2);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", "Segoe UI", sans-serif;
+}
+
+/* 動態一律 ≤ 220ms：流程 B 是站在店裡單手點，動畫不能擋操作。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+body { @apply bg-surface text-ink font-sans antialiased; }
+
+/* 邊界：頁面左右一律 16px。橫向捲動容器補 scroll-padding，捲到底不貼死邊。 */
+@utility gutter { padding-inline: 1rem; }
+@utility rail {
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-padding-inline: 1rem;
+  padding-inline: 1rem;
+}
+.rail::-webkit-scrollbar { display: none; }
+
+/* 形狀：盒子 14px，盒內元素 10px，chip / 頭像 / FAB 全圓。 */
+@layer components {
+  .btn-primary { @apply inline-flex h-11 items-center justify-center gap-2 rounded-[14px] bg-accent px-4 text-[15px] font-semibold text-accent-fg transition duration-150 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40; }
+  .btn-ghost { @apply inline-flex h-11 items-center justify-center gap-2 rounded-[14px] border border-line bg-card px-4 text-[15px] font-medium text-ink transition duration-150 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40; }
+  .btn-danger { @apply inline-flex h-11 items-center justify-center gap-2 rounded-[14px] border border-danger/30 bg-card px-4 text-[15px] font-medium text-danger transition duration-150 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40; }
+  .icon-btn { @apply inline-flex size-10 items-center justify-center rounded-full text-ink transition duration-150 hover:bg-ink/8 active:scale-90 disabled:pointer-events-none disabled:opacity-30; }
+  /* 16px 是硬性下限：iOS Safari 會把 font-size < 16px 的輸入框在聚焦時強制放大整頁，
+     放大後不會自動縮回，看起來就像版面爆開。日期欄位必被點到，所以症狀最明顯。 */
+  .input { @apply h-11 w-full rounded-[14px] border border-line bg-card px-3.5 text-[16px] text-ink outline-none transition duration-150 placeholder:text-muted focus:border-accent focus:ring-[3px] focus:ring-accent/20; }
+  .label { @apply mb-1.5 block text-[13px] font-medium text-muted; }
+  /* iOS Safari 的 date/time 是原生控制項，有一個 width:100% 也壓不下去的內在寬度
+     （min-width:0 無效，因為那個寬度來自原生外觀本身）。拔掉 appearance 才會
+     變成一般的文字框照容器寬度走。點擊仍然會叫出系統日曆。 */
+  input[type="date"], input[type="time"] {
+    min-width: 0;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  /* iOS 預設把值置中，拔掉外觀後要自己靠左對齊 */
+  input[type="date"]::-webkit-date-and-time-value,
+  input[type="time"]::-webkit-date-and-time-value {
+    text-align: left;
+    margin: 0;
+  }
+  .card { @apply rounded-[14px] border border-line bg-card; }
+  .row { @apply flex h-12 w-full items-center gap-3 rounded-[10px] px-3 text-left text-[16px] text-ink transition duration-150 active:bg-ink/6 disabled:opacity-40; }
+
+  /* 篩選 chip 三種語意，靠形狀分辨，不是只靠顏色 */
+  .chip-region, .chip-state, .chip-clear, .chip-tag {
+    @apply inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap px-3 text-[13px] font-medium transition duration-150 active:scale-95;
+  }
+  .chip-region { @apply rounded-[10px] bg-tint-soft text-tint; }          /* 地區＝方 */
+  .chip-region.on { @apply bg-tint text-tint-fg; }
+  .chip-state { @apply rounded-full border border-line bg-card text-muted; } /* 狀態＝外框 */
+  .chip-state.on { @apply border-ink bg-ink text-surface; }
+  .chip-clear { @apply rounded-full border border-danger/40 bg-card text-danger; }
+  .chip-tag { @apply rounded-full border border-transparent; }             /* 標籤＝本身的色 */
+  .rail-label { @apply flex shrink-0 items-center pr-0.5 text-[11px] font-medium tracking-wide text-muted; }
+
+  /* 標籤配色：8 個色相，明暗由 --ink / --card 混出來，一套規則兩個模式 */
+  .tag {
+    background: color-mix(in oklab, var(--tag-c) var(--tag-bg), var(--card));
+    color: color-mix(in oklab, var(--tag-c) 72%, var(--ink));
+  }
+  .chip-tag.on { background: var(--tag-c); color: var(--card); border-color: var(--tag-c); }
+}
+
+/* 旅程卡的資料夾上緣，用 .tag-N 的色相當實色 */
+.folder-tab { background: var(--tag-c); }
+
+/* 同一個暖色系裡的 8 個色相，不跟主色打架 */
+.tag-0 { --tag-c: #b3461f; }
+.tag-1 { --tag-c: #8f5e0a; }
+.tag-2 { --tag-c: #5d6b1e; }
+.tag-3 { --tag-c: #2f6b4a; }
+.tag-4 { --tag-c: #1f6169; }
+.tag-5 { --tag-c: #2f5680; }
+.tag-6 { --tag-c: #6e3c6e; }
+.tag-7 { --tag-c: #9e3358; }
+
+/* ── 動態 ───────────────────────────────────────────────── */
+
+/* Sheet：原生 <dialog>，純 CSS 動畫，不裝任何套件。
+   固定貼在視窗底部。刻意不用 100dvh 撐滿再靠下對齊 —— dvh 會隨手機網址列
+   伸縮而改變，靠下對齊的面板就會在開啟當下往下掉一段。bottom 定位不會。 */
+dialog.sheet {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  top: auto;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 720px;
+  max-height: 85dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+}
+/* 捲動區用預設 flex-basis:auto + min-height:0。
+   flex:1 1 0% 在「高度 auto 的 flex 容器」裡基準是 0：Chrome 會把它壓成一條，
+   Safari 不會 —— 這就是抽屜在 Chrome 只露出一角、Safari 正常的原因。
+   overscroll-contain：抽屜內捲到底時不要把剩下的捲動量傳給背景。 */
+.sheet-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+
+/* 抽屜開著時鎖住背景捲動。:has() 就夠，不需要 JS 記錄再還原 scroll position
+   （那種做法在 iOS 上很容易跳位）。scrollbar-gutter 讓桌機切換時版面不位移。 */
+html { scrollbar-gutter: stable; }
+html:has(dialog.sheet[open]) { overflow: hidden; }
+
+dialog.sheet,
+dialog.sheet::backdrop {
+  transition: translate 260ms cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 200ms cubic-bezier(0.16, 1, 0.3, 1),
+              overlay 260ms allow-discrete,
+              display 260ms allow-discrete;
+}
+dialog.sheet { translate: 0 0; }
+dialog.sheet::backdrop { opacity: 1; }
+dialog.sheet:not([open]) { translate: 0 100%; }
+dialog.sheet:not([open])::backdrop { opacity: 0; }
+@starting-style {
+  dialog.sheet[open] { translate: 0 100%; }
+  dialog.sheet[open]::backdrop { opacity: 0; }
+}
+
+/* 換頁進場：每頁的 <main> 是新元素，掛 CSS animation 就會跑，不需要 <Transition>。
+   FAB / 底部儲存列都在 <main> 外面，不受這裡的 translate 影響。 */
+main { animation: page-in 220ms cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes page-in { from { opacity: 0; translate: 0 10px; } }
+
+/* 清單增刪 / 篩選切換。離場只淡出且抽離版面，避免整批換清單時
+   （切地點↔購物）進場與離場的卡片疊在一起。 */
+.list-move, .list-enter-active {
+  transition: opacity 200ms cubic-bezier(0.22, 0.61, 0.36, 1), translate 200ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.list-enter-from { opacity: 0; translate: 0 10px; }
+.list-leave-active { position: absolute; width: 100%; pointer-events: none; transition: opacity 90ms linear; }
+.list-leave-to { opacity: 0; }
+
+/* toast 從底部推上來 */
+.toast-enter-active, .toast-leave-active { transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1), translate 200ms cubic-bezier(0.16, 1, 0.3, 1); }
+.toast-enter-from, .toast-leave-to { opacity: 0; translate: -50% 14px; }
+
+/* 勾選 / 狀態切換的回饋 */
+@keyframes pop { 0% { scale: 1 } 40% { scale: 1.18 } 100% { scale: 1 } }
+.pop { animation: pop 260ms cubic-bezier(0.16, 1, 0.3, 1); }
