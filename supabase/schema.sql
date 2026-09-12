@@ -10,13 +10,23 @@
 
 -- ---------- 1. 資料表 ----------
 
+-- 帳號密碼登入，不收 email。Supabase Auth 底層仍需要 email 格式，
+-- 前端把帳號接上固定假網域（<帳號>@pretravel.local），使用者看不到也不用輸入。
 create table if not exists public.profiles (
   id           uuid primary key references auth.users on delete cascade,
-  email        text,
+  username     text,
   display_name text not null default '',
   avatar_url   text,
   created_at   timestamptz not null default now()
 );
+-- 舊版跑過的話把 email 欄拿掉，這裡沒有真的 email 可存
+alter table public.profiles drop column if exists email;
+alter table public.profiles add column if not exists username text;
+-- username 存使用者打的原樣（Jean），小寫化只用在登入比對的 email 上。
+-- 唯一性靠這個函式索引，所以 Jean 和 jean 仍然搶不到同一個帳號。
+-- 注意：之後若要用帳號查詢，條件要寫 lower(username) = lower($1) 或 ilike，
+-- 直接 eq 會變成大小寫敏感，索引也吃不到。
+create unique index if not exists profiles_username_key on public.profiles (lower(username));
 
 create table if not exists public.trips (
   id           uuid primary key default gen_random_uuid(),
@@ -105,20 +115,23 @@ create index if not exists item_tags_tag_idx     on public.item_tags (tag_id);
 
 -- ---------- 2. 觸發器 ----------
 
--- Google 第一次登入時自動建 profile（F-01）
+-- 註冊時自動建 profile（F-01）。
+-- 帳號取自註冊時帶的 metadata；若是直接在 Supabase 後台開的帳號就退回 email 的 @ 前段，
+-- 這樣手動建帳號也會有合理的使用者名稱。
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare uname text;
 begin
-  insert into public.profiles (id, email, display_name, avatar_url)
+  uname := coalesce(
+    nullif(new.raw_user_meta_data ->> 'username', ''),
+    split_part(coalesce(new.email, 'user'), '@', 1)
+  );
+  insert into public.profiles (id, username, display_name, avatar_url)
   values (
     new.id,
-    new.email,
-    coalesce(
-      nullif(new.raw_user_meta_data ->> 'full_name', ''),
-      nullif(new.raw_user_meta_data ->> 'name', ''),
-      split_part(coalesce(new.email, 'user'), '@', 1)
-    ),
-    new.raw_user_meta_data ->> 'avatar_url'
+    uname,
+    coalesce(nullif(new.raw_user_meta_data ->> 'display_name', ''), uname),
+    null
   )
   on conflict (id) do nothing;
   return new;

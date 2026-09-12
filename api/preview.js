@@ -159,6 +159,6 @@ export default async function handler(req, res) {
   res.status(200).json({ title, description, image })
 }
 
-// 給 scripts/check-preview.mjs 用，Vercel 只會用到 default export
+// 給 scripts/check.mjs 用，Vercel 只會用到 default export
 export { isBlocked, meta, decode, toText }
 
