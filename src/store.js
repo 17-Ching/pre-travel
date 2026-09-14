@@ -115,7 +115,8 @@ export const regionItemCount = r => store.items.filter(i => i.regionId === r.id)
 export const myTags = tripId => store.tags.filter(g => g.tripId === tripId && g.userId === store.me)
 export const tagUsage = g => store.items.filter(i => i.tagIds.includes(g.id)).length
 export const item = id => store.items.find(i => i.id === id)
-export const prefs = tripId => (store.prefs[tripId] ??= { tab: 'me', type: 'place', region: 'all', status: '', tag: '', q: '' })
+// F-09：v2.0 起預設落點是行程，不是自己的清單分頁
+export const prefs = tripId => (store.prefs[tripId] ??= { tab: 'itinerary', type: 'place', region: 'all', status: '', tag: '', q: '' })
 const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 
 // ---- 載入
@@ -397,11 +398,15 @@ export function deleteItem(id) {
   // F-47：資料庫的觸發器會把引用它的行程項目斷開並留下標題快照。
   // 這裡做同一件事，畫面才不用等重新整理就正確。
   const refs = store.entries.filter(e => e.itemId === id)
-  const snapshot = refs.map(e => ({ e, itemId: e.itemId, title: e.title }))
-  refs.forEach(e => { e.itemId = null; e.title = e.title?.trim() || removed.title })
+  const snapshot = refs.map(e => ({ e, itemId: e.itemId, title: e.title, detachedAt: e.detachedAt }))
+  refs.forEach(e => {
+    e.itemId = null
+    e.title = e.title?.trim() || removed.title
+    e.detachedAt = now()
+  })
   push(() => api.deleteItem(id), () => {
     store.items.splice(i, 0, removed)
-    snapshot.forEach(s => Object.assign(s.e, { itemId: s.itemId, title: s.title }))
+    snapshot.forEach(s => Object.assign(s.e, { itemId: s.itemId, title: s.title, detachedAt: s.detachedAt }))
   })
 }
 
@@ -548,7 +553,10 @@ export const dayNote = (tripId, date) =>
 // F-47 斷開引用後 title 變成快照，這兩支負責把判斷收在一個地方。
 export const entryTitle = e => (e.itemId ? item(e.itemId)?.title || e.title : e.title)
 export const entryThumb = e => (e.itemId ? item(e.itemId)?.images?.[0]?.url || '' : '')
-export const entryDetached = e => Boolean(!e.itemId && e.title && e.kind !== 'transport')
+// 「使用者自己打的」和「引用被刪掉後斷開的」資料長得一模一樣，
+// item_id 都是 null、title 都有值，所以必須靠資料庫留下的記號來分，
+// 前端推不出來。detached_at 由 F-47 的觸發器寫入。
+export const entryDetached = e => Boolean(e.detachedAt)
 
 // F-41 的重複提示與 F-15 的「已排入行程」徽章共用這一支
 export const scheduledSlots = itemId => store.entries
@@ -568,6 +576,7 @@ function buildEntry(d, order) {
     transportMode: d.transportMode ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
     note: d.note ?? '', done: false, order,
+    detachedAt: null,
     createdBy: store.me, updatedBy: store.me,
     createdAt: now(), updatedAt: now(),
   })

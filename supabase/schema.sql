@@ -120,6 +120,11 @@ create table if not exists public.itinerary_entries (
   kind           text not null default 'place' check (kind in ('place', 'transport')),
   -- 引用不是複製（Q10）。項目被刪時不連鎖刪這一列，見下方 F-47 的觸發器。
   item_id        uuid references public.items on delete set null,
+  -- F-47 斷開引用的時間。這個欄位是必要的，不是紀錄用途：
+  -- 「使用者自己打的」和「引用被刪掉後斷開的」兩種資料長得一模一樣
+  -- （item_id 都是 null、title 都有值），沒有這個記號前端分不出來，
+  -- 每一筆自由輸入的項目都會被誤標成「原項目已刪除」。
+  detached_at    timestamptz,
   title          text not null default '' check (char_length(title) <= 100),
   transport_mode text not null default '' check (char_length(transport_mode) <= 30),
   -- D8：純 TIME 不做時區換算。在台灣排、在日本看，用 timestamp 會整份差幾小時。
@@ -156,6 +161,8 @@ create table if not exists public.trip_days (
   updated_at timestamptz not null default now(),
   primary key (trip_id, date)
 );
+-- 已經建過表的資料庫也要補上這一欄（create table if not exists 不會改既有的表）
+alter table public.itinerary_entries add column if not exists detached_at timestamptz;
 
 create index if not exists items_trip_idx        on public.items (trip_id);
 create index if not exists items_owner_idx       on public.items (trip_id, owner_user_id, type);
@@ -244,7 +251,10 @@ begin
      set item_id = null,
          -- 引用中的 entry 標題本來是空的，填入被刪項目的標題當快照
          title   = case when btrim(title) <> '' then title else old.title end,
-         updated_at = now()
+         -- 沒有這個記號的話，「使用者自己打的」和「引用被刪掉的」分不出來，
+         -- 每一筆自由輸入的項目都會被誤標成「原項目已刪除」
+         detached_at = now(),
+         updated_at  = now()
    where item_id = old.id;
   return old;
 end $$;

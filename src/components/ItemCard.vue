@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { PhMapPin, PhShoppingBag, PhCheck, PhDotsThreeVertical } from '@phosphor-icons/vue'
-import { store, user, sourceLabel, firstUrl } from '../store'
+import { store, user, sourceLabel, firstUrl, scheduledSlots } from '../store'
 import TagChip from './TagChip.vue'
 import Avatar from './Avatar.vue'
 
@@ -13,6 +13,8 @@ const thumb = computed(() => props.item.images[0]?.url || '')
 const region = computed(() => store.regions.find(r => r.id === props.item.regionId)?.name)
 const tags = computed(() => props.item.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean))
 const done = computed(() => (props.item.type === 'shopping' ? props.item.status === 'bought' : props.item.visited))
+// F-15：已排入行程的徽章。購物不進行程，不用算
+const scheduled = computed(() => (props.item.type === 'place' ? scheduledSlots(props.item.id).length : 0))
 // 縮圖上的來源標示看第一個連結；還有其他連結就加上數量
 const links = computed(() => props.item.links ?? [])
 const source = computed(() => {
@@ -45,7 +47,10 @@ function fire(evt) {
       <div class="min-w-0 flex-1">
         <h3 :class="['line-clamp-2 text-[16px] font-semibold leading-[1.35] tracking-tight', item.status === 'bought' && 'line-through decoration-1']">{{ item.title }}</h3>
         <p v-if="item.plannedStore" class="mt-1 truncate text-[13px] font-medium text-accent">{{ item.plannedStore }}</p>
-        <div v-if="region || tags.length" class="mt-2 flex flex-wrap gap-1.5">
+        <div v-if="region || tags.length || scheduled" class="mt-2 flex flex-wrap gap-1.5">
+          <span v-if="scheduled" class="inline-flex h-[22px] items-center gap-1 rounded-md bg-accent-soft px-1.5 text-[11px] font-semibold text-accent">
+            已排入行程<template v-if="scheduled > 1"> {{ scheduled }}</template>
+          </span>
           <span v-if="region" class="inline-flex h-[22px] items-center rounded-md bg-tint-soft px-1.5 text-[11px] font-medium text-tint">{{ region }}</span>
           <TagChip v-for="n in tags" :key="n" :name="n" />
         </div>

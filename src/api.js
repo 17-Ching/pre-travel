@@ -48,6 +48,7 @@ const toEntry = r => ({
   transportMode: r.transport_mode ?? '',
   startTime: hhmm(r.start_time), endTime: hhmm(r.end_time),
   note: r.note ?? '', done: r.done, order: r.sort_order,
+  detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
 })

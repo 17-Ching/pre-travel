@@ -270,6 +270,14 @@ do $$ begin
     'F-47：引用已斷開');
   perform ok((select done from itinerary_entries where title = '一蘭 新宿') = true,
     'F-47：完成狀態保留');
+  -- 「使用者自己打的」和「引用被刪掉後斷開的」資料形狀一模一樣，
+  -- 沒有 detached_at 的話畫面會把每一筆自由輸入的項目都標成「原項目已刪除」
+  perform ok((select detached_at from itinerary_entries where title = '一蘭 新宿') is not null,
+    'F-47：斷開的項目有蓋上 detached_at');
+  perform ok((select detached_at from itinerary_entries where title = '隨便一間拉麵') is null,
+    'F-47：自由輸入的項目不會被誤標成已斷開');
+  perform ok((select detached_at from itinerary_entries where title = '新宿 → 鎌倉') is null,
+    'F-47：交通項目也不會被誤標');
 end $$;
 
 -- 非成員完全碰不到行程
