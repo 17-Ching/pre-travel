@@ -1,12 +1,13 @@
-// Mock data layer for the prototype. Shapes follow PRD §4 so it can be swapped for Supabase later.
-// ponytail: whole store persisted to localStorage; bump SEED_VERSION to reseed after editing seed().
+// 畫面的資料來源。store 是 Supabase 的本地鏡像：
+// 讀取一律同步（頁面直接讀 store），寫入一律樂觀 —— 先改本地讓畫面立刻反應，
+// 再把同一筆送上伺服器，失敗就回捲並跳提示。
+// 這也是 PRD F-19 / F-33 要的行為，離線佇列之後接在同一個位置。
 import { reactive, watch } from 'vue'
+import * as api from './api'
+import { sb, isConfigured, signIn as authSignIn, signUp as authSignUp, signOut as authSignOut } from './supabase'
 
-const SEED_VERSION = 1
-const uid = () => Math.random().toString(36).slice(2, 10)
+const uid = () => crypto.randomUUID()
 export const now = () => new Date().toISOString()
-const daysAgo = d => new Date(Date.now() - d * 864e5).toISOString()
-const daysFromNow = d => daysAgo(-d)
 
 export const fmtDate = iso => (iso ? new Date(iso).toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' }) : '')
 export const fmtDateTime = iso => (iso ? new Date(iso).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '')
@@ -24,7 +25,7 @@ export const countryName = code => COUNTRIES.find(c => c.code === code)?.name ??
 export const tagHue = name => [...name].reduce((h, c) => (h * 31 + c.codePointAt(0)) >>> 0, 7) % 8
 export const tagColor = name => `tag tag-${tagHue(name)}`
 
-// 卡片上的來源標示。F-14 已經在抓 OG，真實版直接存 domain 即可。
+// 卡片上的來源標示
 const SOURCES = [
   [/maps\.app\.goo\.gl|goo\.gl\/maps|google\.[a-z.]+\/maps/, 'Maps'],
   [/instagram\.com/, 'IG'],
@@ -46,8 +47,7 @@ export const newLink = () => ({ id: uid(), url: '', title: '' })
 export const linkLabel = l => l.title?.trim() || sourceLabel(l.url) || l.url
 export const firstUrl = item => item.links?.[0]?.url || ''
 
-// ---- 深淺色：兩態。獨立於 store，重設示範資料不會被清掉。
-// 沒存過（或存到舊的 ''）就用系統當下的偏好當起點，第一次打開不會跟系統相反。
+// ---- 深淺色：兩態，跟登入無關，所以留在 localStorage
 export const THEMES = [['light', '淺色'], ['dark', '深色']]
 const savedTheme = localStorage.getItem('pretravel-theme')
 export const theme = reactive({
@@ -61,117 +61,47 @@ watch(() => theme.v, v => {
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', v === 'dark' ? '#141f1e' : '#f3d9b8')
 }, { immediate: true })
 
-const pic = (seed, w = 800, h = 600) => ({ url: `https://picsum.photos/seed/${seed}/${w}/${h}`, w, h })
-const avatar = u => `https://i.pravatar.cc/96?u=${u}`
+// ---- store 本體
+const empty = () => ({ users: [], trips: [], members: [], regions: [], tags: [], items: [], invites: [] })
+export const store = reactive({
+  me: null,          // 目前登入者的 id
+  ready: false,      // 第一次載入完成前，頁面顯示載入中
+  loading: false,
+  offline: false,
+  pending: [],
+  toast: null,
+  syncedAt: now(),
+  // 篩選條件記在本機，切換分頁不重設（F-24）
+  prefs: JSON.parse(localStorage.getItem('pretravel-prefs') || '{}'),
+  ...empty(),
+})
+watch(() => store.prefs, p => localStorage.setItem('pretravel-prefs', JSON.stringify(p)), { deep: true })
 
-function seed() {
-  const item = o => {
-    const b = { id: uid(), tripId: 't1', ownerUserId: 'u1', type: 'place', regionId: null, links: [], urlImage: '', images: [], note: '', visited: false, status: 'todo', plannedStore: '', tagIds: [], createdAt: daysAgo(o.age ?? 1), updatedAt: daysAgo(o.age ?? 1), ...o }
-    b.createdBy ??= b.ownerUserId ?? 'u1'
-    b.updatedBy = b.createdBy
-    // seed 用單一 url/urlTitle 寫比較好讀，這裡轉成 links 陣列
-    if (b.url) b.links = [{ id: uid(), url: b.url, title: b.urlTitle || '' }]
-    delete b.url; delete b.urlTitle; delete b.age
-    return b
-  }
-  const maps = 'https://maps.app.goo.gl/'
-  return {
-    v: SEED_VERSION, me: null, offline: false, pending: [], toast: null, prefs: {}, syncedAt: now(),
-    users: [
-      { id: 'u1', name: 'Jean', avatar: avatar('jean') },
-      { id: 'u2', name: 'Ruby', avatar: avatar('ruby') },
-      { id: 'u3', name: '阿凱', avatar: avatar('kai') },
-      { id: 'u4', name: '小米', avatar: avatar('mi') },
-    ],
-    trips: [
-      { id: 't1', name: '2026 秋・日本', country: 'JP', cover: pic('kyoto-autumn-street', 800, 450).url, start: '2026-11-12', end: '2026-11-19', ownerId: 'u1', deletedAt: null, updatedAt: daysAgo(0) },
-      { id: 't2', name: '2025 冬・韓國', country: 'KR', cover: null, start: '2025-12-20', end: '2025-12-26', ownerId: 'u2', deletedAt: null, updatedAt: daysAgo(40) },
-      { id: 't3', name: '2026 春・泰國', country: 'TH', cover: pic('bangkok-market', 800, 450).url, start: null, end: null, ownerId: 'u3', deletedAt: null, updatedAt: daysAgo(3) },
-    ],
-    members: [
-      { tripId: 't1', userId: 'u1', role: 'owner', status: 'active', joinedAt: daysAgo(30), leftAt: null },
-      { tripId: 't1', userId: 'u2', role: 'member', status: 'active', joinedAt: daysAgo(28), leftAt: null },
-      { tripId: 't1', userId: 'u3', role: 'member', status: 'active', joinedAt: daysAgo(20), leftAt: null },
-      { tripId: 't1', userId: 'u4', role: 'member', status: 'left', joinedAt: daysAgo(25), leftAt: daysAgo(3) },
-      { tripId: 't2', userId: 'u2', role: 'owner', status: 'active', joinedAt: daysAgo(90), leftAt: null },
-      { tripId: 't2', userId: 'u1', role: 'member', status: 'active', joinedAt: daysAgo(88), leftAt: null },
-      { tripId: 't3', userId: 'u3', role: 'owner', status: 'active', joinedAt: daysAgo(10), leftAt: null },
-      { tripId: 't3', userId: 'u2', role: 'member', status: 'active', joinedAt: daysAgo(9), leftAt: null },
-    ],
-    regions: [
-      { id: 'r1', tripId: 't1', name: '東京', order: 0 },
-      { id: 'r2', tripId: 't1', name: '大阪', order: 1 },
-      { id: 'r3', tripId: 't1', name: '京都', order: 2 },
-      { id: 'r4', tripId: 't2', name: '首爾', order: 0 },
-      { id: 'r5', tripId: 't3', name: '曼谷', order: 0 },
-    ],
-    tags: [
-      { id: 'g1', tripId: 't1', userId: 'u1', name: '拉麵' },
-      { id: 'g2', tripId: 't1', userId: 'u1', name: '甜點' },
-      { id: 'g3', tripId: 't1', userId: 'u1', name: '藥妝' },
-      { id: 'g4', tripId: 't1', userId: 'u1', name: '伴手禮' },
-      { id: 'g5', tripId: 't1', userId: 'u2', name: '拉麵' },
-      { id: 'g6', tripId: 't1', userId: 'u2', name: '咖啡' },
-      { id: 'g7', tripId: 't1', userId: 'u3', name: '必吃' },
-    ],
-    items: [
-      // 我的・地點
-      item({ title: '一蘭 新宿中央東口店', regionId: 'r1', url: maps + 'x1kr9', urlTitle: '一蘭 新宿中央東口店', urlImage: pic('ichiran-shinjuku').url, tagIds: ['g1'], note: '24 小時營業，早上人最少\n先在門口機器買食券', age: 2 }),
-      item({ title: '麵屋一燈', regionId: 'r1', url: maps + 'm2tq4', urlTitle: '麵屋一燈', urlImage: pic('menya-itto').url, tagIds: ['g1'], note: '濃厚魚介沾麵，開店前 30 分鐘去排', age: 5 }),
-      item({ title: 'HARBS 澀谷店', regionId: 'r1', url: 'https://www.instagram.com/p/harbs-shibuya/', urlTitle: 'HARBS 澀谷店', urlImage: pic('harbs-cake').url, tagIds: ['g2'], note: '水果千層蛋糕，季節限定的先問', age: 6 }),
-      item({ title: '黑門市場', regionId: 'r2', url: maps + 'k8bn2', urlTitle: '黑門市場', urlImage: pic('kuromon-market').url, visited: true, note: '早上去，河豚跟烤扇貝', age: 9 }),
-      item({ title: '伏見稻荷大社', regionId: 'r3', url: maps + 'f4sh1', urlTitle: '伏見稻荷大社', images: [pic('fushimi-inari-torii'), pic('fushimi-inari-path')], note: '走到四辻就好，來回約 1.5 小時', age: 12 }),
-      item({ title: '蔦屋書店 銀座', url: maps + 't7gz3', urlTitle: 'GINZA SIX 蔦屋書店', urlImage: pic('ginza-bookstore').url, note: '藝術書區', age: 1 }),
-      // 我的・購物
-      item({ type: 'shopping', title: '合利他命 EX Plus 270 錠', regionId: 'r2', plannedStore: '唐吉訶德 道頓堀店', tagIds: ['g3'], images: [pic('alinamin-box', 600, 600)], note: '幫媽媽帶兩盒', age: 3 }),
-      item({ type: 'shopping', title: '休足時間 18 片', regionId: 'r2', plannedStore: '松本清', tagIds: ['g3'], age: 4 }),
-      item({ type: 'shopping', title: "ROYCE' 生巧克力 原味", plannedStore: '關西機場 免稅店', tagIds: ['g4'], status: 'bought', images: [pic('royce-chocolate', 600, 600)], age: 7 }),
-      item({ type: 'shopping', title: '東京香蕉 8 入', regionId: 'r1', plannedStore: '東京車站', tagIds: ['g4'], status: 'not_found', note: '車站店缺貨，機場再看', age: 8 }),
-      item({ type: 'shopping', title: '太田胃散 分包 32 包', regionId: 'r1', plannedStore: '松本清', tagIds: ['g3'], status: 'bought', age: 10 }),
-      // 共同分頁
-      item({ ownerUserId: null, createdBy: 'u2', title: '一蘭 道頓堀店', regionId: 'r2', url: maps + 'd3rm7', urlTitle: '一蘭 道頓堀店', urlImage: pic('ichiran-dotonbori').url, tagIds: ['g1', 'g5'], note: '大家一起去的那天吃', age: 4 }),
-      item({ ownerUserId: null, createdBy: 'u3', title: '蟹道樂 道頓堀本店', regionId: 'r2', url: maps + 'c9kn5', urlTitle: '蟹道樂 道頓堀本店', urlImage: pic('crab-restaurant').url, tagIds: ['g7'], note: '要先訂位，阿凱負責', age: 6 }),
-      item({ ownerUserId: null, createdBy: 'u3', type: 'shopping', title: 'KitKat 抹茶 大包裝 x4', regionId: 'r2', plannedStore: '唐吉訶德 道頓堀店', note: '辦公室分', age: 2 }),
-      // Ruby 的分頁
-      item({ ownerUserId: 'u2', title: '% Arabica 京都嵐山', regionId: 'r3', url: maps + 'a5rb8', urlTitle: '% Arabica Kyoto Arashiyama', urlImage: pic('arabica-coffee').url, tagIds: ['g6'], note: '河邊那間，早上光線好', age: 5 }),
-      item({ ownerUserId: 'u2', title: '中村藤吉 本店', regionId: 'r3', url: maps + 'n1tk6', urlTitle: '中村藤吉本店', urlImage: pic('uji-matcha').url, note: '抹茶蕎麥麵、生茶果凍', age: 7 }),
-      item({ ownerUserId: 'u2', type: 'shopping', title: 'SK-II 青春露 230ml', plannedStore: '機場免稅', age: 3 }),
-      // 阿凱的分頁
-      item({ ownerUserId: 'u3', title: '美津の 大阪燒', regionId: 'r2', url: maps + 'z6ok2', urlTitle: 'お好み焼 美津の', urlImage: pic('okonomiyaki').url, tagIds: ['g7'], age: 8 }),
-      // 小米（已離開）的分頁
-      item({ ownerUserId: 'u4', title: '淺草 花月堂 菠蘿麵包', regionId: 'r1', url: maps + 'h2ks9', urlTitle: '浅草花月堂', urlImage: pic('melon-pan').url, age: 15 }),
-      // 韓國
-      item({ tripId: 't2', title: '廣藏市場', regionId: 'r4', url: maps + 'g4jm1', urlTitle: '광장시장', urlImage: pic('gwangjang-market').url, note: '綁帶飯捲、綠豆煎餅', age: 45 }),
-      item({ tripId: 't2', type: 'shopping', title: '正官庄 紅蔘精', plannedStore: '樂天免稅店', age: 44 }),
-    ],
-    invites: [
-      { id: 'i1', tripId: 't1', token: 'k7QmZ2pW9xL4vB3n', createdBy: 'u1', expiresAt: daysFromNow(5), revokedAt: null },
-      { id: 'i2', tripId: 't3', token: 'demo-thai', createdBy: 'u3', expiresAt: daysFromNow(6), revokedAt: null },
-      { id: 'i3', tripId: 't3', token: 'expired-demo', createdBy: 'u3', expiresAt: daysAgo(1), revokedAt: null },
-    ],
-  }
+// ---- toast
+let toastTimer
+export function toast(text, action) {
+  store.toast = { text, action }
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (store.toast = null), 3500)
 }
 
-const saved = JSON.parse(localStorage.getItem('pretravel') || 'null')
-export const store = reactive(saved?.v === SEED_VERSION ? { ...saved, toast: null, offline: false, pending: [] } : seed())
-// 舊資料（單一 url + urlTitle）就地升級成 links 陣列，不用重設示範資料。
-store.items.forEach(i => {
-  if (i.links) return
-  i.links = i.url ? [{ id: uid(), url: i.url, title: i.urlTitle || '' }] : []
-  delete i.url; delete i.urlTitle
-})
+// 樂觀寫入的共用外殼：本地已經改好了，這裡只負責送出與善後。
+// 失敗時跑 rollback 並把訊息講出來，不能靜默丟失（PRD §7 錯誤處理）。
+//
+// 全部寫入排成一條序列，不是為了節流，是因為後寫的可能引用先寫的：
+// 使用者在新增項目時順手建了地區，本地兩筆立刻就有了，但送到伺服器如果亂序，
+// 項目會因為地區還不存在而踩到外鍵錯誤。實測就是這樣掛的。
+// 所以這裡收的是「還沒發動的函式」，輪到它才真的送出。
+let chain = Promise.resolve()
+function push(makeRequest, rollback) {
+  chain = chain.then(makeRequest).catch(err => {
+    rollback?.()
+    toast(err.message || '儲存失敗，請再試一次')
+  })
+  return chain
+}
 
-// 圖片以 data URL 存進 localStorage，會撞到 ~5 MB 上限。塞爆時要講出來，
-// 不能讓 watch 每次都 throw 然後靜默停止保存。真實版圖片在 bucket，不會有這問題。
-let quotaWarned = false
-watch(store, s => {
-  try { localStorage.setItem('pretravel', JSON.stringify(s)) } catch {
-    if (!quotaWarned) { quotaWarned = true; toast('本機空間已滿，新的變更不會被保留（原型限制）') }
-  }
-}, { deep: true })
-export function resetDemo() { localStorage.removeItem('pretravel'); location.href = '/login' }
-
-// ---- reads
+// ---- reads（全部同步，頁面不用改）
 export const me = () => store.users.find(u => u.id === store.me)
 export const user = id => store.users.find(u => u.id === id)
 export const trip = id => store.trips.find(t => t.id === id && !t.deletedAt)
@@ -188,24 +118,72 @@ export const item = id => store.items.find(i => i.id === id)
 export const prefs = tripId => (store.prefs[tripId] ??= { tab: 'me', type: 'place', region: 'all', status: '', tag: '', q: '' })
 const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 
-// ---- toast
-let toastTimer
-export function toast(text, action) {
-  store.toast = { text, action }
-  clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => (store.toast = null), 3500)
+// ---- 載入
+// 圖片存的是 bucket 路徑，畫面要的是簽名網址。一次簽一批補上 url 欄位。
+async function attachImageUrls() {
+  const paths = [
+    ...store.trips.map(t => t.coverPath),
+    ...store.items.flatMap(i => i.images.map(im => im.path)),
+  ]
+  const signed = await api.signPaths(paths)
+  for (const t of store.trips) t.cover = signed.get(t.coverPath) || ''
+  for (const i of store.items) for (const im of i.images) im.url = signed.get(im.path) || ''
+}
+
+export async function refresh() {
+  if (!store.me) return
+  store.loading = true
+  try {
+    Object.assign(store, await api.loadAll())
+    await attachImageUrls()
+    store.syncedAt = now()
+  } catch (err) {
+    toast(err.message)
+  } finally {
+    store.loading = false
+    store.ready = true
+  }
 }
 
 // ---- auth
-export function login(userId) { store.me = userId }
-export function logout() { store.me = null }
+const currentUserId = async () => (await sb().auth.getSession()).data.session?.user?.id ?? null
+
+export async function bootstrap() {
+  // 沒設定環境變數時不要炸掉整個 app，讓畫面正常走到登入頁再講
+  if (!isConfigured) { store.ready = true; return }
+  try { store.me = await currentUserId() } catch { store.me = null }
+  if (store.me) await refresh()
+  else store.ready = true
+}
+
+export async function signUp(username, password, displayName) {
+  const { error } = await authSignUp(username, password, displayName)
+  if (error) return { error }
+  store.me = await currentUserId()
+  if (!store.me) return { error: '註冊成功但沒有拿到登入狀態，請改用登入' }
+  await refresh()
+  return { error: null }
+}
+
+export async function signIn(username, password) {
+  const { error } = await authSignIn(username, password)
+  if (error) return { error }
+  store.me = await currentUserId()
+  await refresh()
+  return { error: null }
+}
+
+export async function logout() {
+  await authSignOut()
+  store.me = null
+  store.ready = true
+  Object.assign(store, empty())
+}
 
 // ---- images
-// F-27 的前端壓縮。存 data URL 而不是 objectURL：blob: 網址重整後就失效，圖會變破圖。
-// 原型把圖片塞進 localStorage，所以尺寸比 PRD 的 1600 px 保守（見 MAX）；
-// 真實版改成 canvas.toBlob() 上傳 bucket，這段 canvas 邏輯可以原封不動重用。
-export const MAX = { avatar: 256, cover: 1024, item: 800 }
-export function shrinkImage(file, max = MAX.item) {
+// F-27 的前端壓縮。canvas 縮完轉成 Blob 上傳 bucket，資料庫只存路徑。
+export const MAX = { avatar: 256, cover: 1024, item: 1600 }
+function drawScaled(file, max) {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const src = URL.createObjectURL(file)
@@ -216,57 +194,139 @@ export function shrinkImage(file, max = MAX.item) {
       c.height = Math.round(img.height * s)
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
       URL.revokeObjectURL(src)
-      resolve({ url: c.toDataURL('image/jpeg', 0.82), w: c.width, h: c.height })
+      c.toBlob(b => (b ? resolve({ blob: b, w: c.width, h: c.height }) : reject(new Error('encode'))), 'image/jpeg', 0.82)
     }
     img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('decode')) }
     img.src = src
   })
 }
 
+// 回傳 { path, url, w, h }：path 進資料庫，url 給畫面立刻顯示
+export async function uploadItemImage(tripId, file, max = MAX.item) {
+  const { blob, w, h } = await drawScaled(file, max)
+  const path = await api.uploadImage(tripId, blob)
+  const signed = await api.signPaths([path])
+  return { path, url: signed.get(path) || URL.createObjectURL(blob), w, h }
+}
+
+// F-14 / F-28：連結預覽圖與貼上的圖片網址都要轉存成自己的副本，
+// 因為 IG 和 Google 的圖片網址會過期，而且離線時要有本地檔。
+// 後端已經把圖抓成 data URL 送回來（瀏覽器直接抓跨網域圖片會污染 canvas）。
+export async function uploadImageFromDataUrl(tripId, dataUrl) {
+  const blob = await (await fetch(dataUrl)).blob()
+  return uploadItemImage(tripId, blob)
+}
+
 // ---- profile
-export function updateProfile({ name, avatar }) {
-  const u = me()
-  name = name.trim().slice(0, 30)
+export async function updateProfile({ name, avatarFile, avatar }) {
+  name = (name ?? '').trim().slice(0, 30)
   if (!name) return false
-  Object.assign(u, { name, avatar })
-  return true
+  try {
+    let avatarUrl = avatar ?? me()?.avatar ?? null
+    if (avatarFile) {
+      const { blob } = await drawScaled(avatarFile, MAX.avatar)
+      avatarUrl = await api.uploadAvatar(store.me, blob)
+    }
+    const saved = await api.saveProfile(store.me, { name, avatar: avatarUrl })
+    Object.assign(me(), saved)
+    return true
+  } catch (err) {
+    toast(err.message)
+    return false
+  }
 }
 
 // ---- trips
-export function createTrip({ name, country, start, end, cover }) {
-  const id = uid(), ts = now()
-  store.trips.push({ id, name: name.trim(), country, cover: cover || null, start: start || null, end: end || null, ownerId: store.me, deletedAt: null, updatedAt: ts })
-  store.members.push({ tripId: id, userId: store.me, role: 'owner', status: 'active', joinedAt: ts, leftAt: null })
-  return id
+// 這一支是非同步的：id 由 create_trip 在伺服器端產生，畫面要拿它導頁
+export async function createTrip({ name, country, start, end, coverFile }) {
+  try {
+    let coverPath = null
+    if (coverFile) {
+      const { blob } = await drawScaled(coverFile, MAX.cover)
+      // 封面要先有 trip id 才知道放哪個資料夾，所以先建專案、再補封面
+      const id = await api.createTrip({ name, country, start, end, coverPath: null })
+      await refresh()
+      coverPath = await api.uploadImage(id, blob)
+      await api.updateTrip(id, { name, country, start, end, coverPath })
+      await refresh()
+      return id
+    }
+    coverPath = null
+    const id = await api.createTrip({ name, country, start, end, coverPath })
+    await refresh()
+    return id
+  } catch (err) {
+    toast(err.message)
+    return null
+  }
 }
-export function updateTrip(id, { name, country, start, end, cover }) {
-  Object.assign(trip(id), { name: name.trim(), country, start: start || null, end: end || null, cover: cover || null, updatedAt: now() })
+
+export async function updateTrip(id, { name, country, start, end, coverFile, cover }) {
+  const t = trip(id)
+  if (!t) return
+  try {
+    let coverPath = t.coverPath
+    if (coverFile) {
+      const { blob } = await drawScaled(coverFile, MAX.cover)
+      coverPath = await api.uploadImage(id, blob)
+    } else if (cover === null) {
+      coverPath = null
+    }
+    const saved = await api.updateTrip(id, { name, country, start, end, coverPath })
+    Object.assign(t, saved)
+    await attachImageUrls()
+  } catch (err) {
+    toast(err.message)
+  }
 }
-export function deleteTrip(id) { trip(id).deletedAt = now() }
+
+export function deleteTrip(id) {
+  const t = trip(id)
+  if (!t) return
+  const before = t.deletedAt
+  t.deletedAt = now()
+  return push(() => api.deleteTrip(id), () => { t.deletedAt = before })
+}
 
 // ---- regions
 export function addRegion(tripId, name) {
   name = name.trim().slice(0, 30)
   if (!name) return null
   if (store.regions.some(r => r.tripId === tripId && r.name === name)) { toast('已有同名地區'); return null }
-  const r = { id: uid(), tripId, name, order: regionsOf(tripId).length }
-  store.regions.push(r); touch(tripId)
+  const r = reactive({ id: uid(), tripId, name, order: regionsOf(tripId).length })
+  store.regions.push(r)
+  touch(tripId)
+  push(() => api.addRegion(tripId, name, r.order, r.id), () => {
+    const i = store.regions.indexOf(r)
+    if (i >= 0) store.regions.splice(i, 1)
+  })
   return r
 }
 export function renameRegion(r, name) {
   name = name.trim().slice(0, 30)
-  if (!name) return
+  if (!name || name === r.name) return
   if (store.regions.some(x => x.tripId === r.tripId && x.name === name && x.id !== r.id)) return toast('已有同名地區')
+  const before = r.name
   r.name = name
+  push(() => api.renameRegion(r.id, name), () => { r.name = before })
 }
 export function moveRegion(r, dir) {
   const list = regionsOf(r.tripId), i = list.indexOf(r), j = i + dir
   if (j < 0 || j >= list.length) return
   ;[list[i].order, list[j].order] = [list[j].order, list[i].order]
+  push(() => api.setRegionOrder([[list[i].id, list[i].order], [list[j].id, list[j].order]]), () => {
+    ;[list[i].order, list[j].order] = [list[j].order, list[i].order]
+  })
 }
 export function deleteRegion(r) {
-  store.items.forEach(i => { if (i.regionId === r.id) i.regionId = null })
-  store.regions.splice(store.regions.indexOf(r), 1)
+  const i = store.regions.indexOf(r)
+  const affected = store.items.filter(x => x.regionId === r.id)
+  affected.forEach(x => { x.regionId = null })
+  store.regions.splice(i, 1)
+  push(() => api.deleteRegion(r.id), () => {
+    store.regions.splice(i, 0, r)
+    affected.forEach(x => { x.regionId = r.id })
+  })
 }
 
 // ---- tags (F-22: per user × trip, max 50)
@@ -277,80 +337,150 @@ export function ensureTag(tripId, name) {
   const found = mine.find(g => g.name === name)
   if (found) return found
   if (mine.length >= 50) { toast('每個專案最多 50 個標籤'); return null }
-  const g = { id: uid(), tripId, userId: store.me, name }
+  const g = reactive({ id: uid(), tripId, userId: store.me, name })
   store.tags.push(g)
+  push(() => api.addTag(tripId, store.me, name, g.id), () => {
+    const i = store.tags.indexOf(g)
+    if (i >= 0) store.tags.splice(i, 1)
+  })
   return g
 }
 export function renameTag(g, name) {
   name = name.trim().slice(0, 20)
-  if (!name) return
+  if (!name || name === g.name) return
   if (myTags(g.tripId).some(x => x.name === name && x.id !== g.id)) return toast('已有同名標籤')
+  const before = g.name
   g.name = name
+  push(() => api.renameTag(g.id, name), () => { g.name = before })
 }
 export function deleteTag(g) {
-  store.items.forEach(i => { const k = i.tagIds.indexOf(g.id); if (k >= 0) i.tagIds.splice(k, 1) })
-  store.tags.splice(store.tags.indexOf(g), 1)
+  const i = store.tags.indexOf(g)
+  const tagged = store.items.filter(x => x.tagIds.includes(g.id))
+  tagged.forEach(x => x.tagIds.splice(x.tagIds.indexOf(g.id), 1))
+  store.tags.splice(i, 1)
+  push(() => api.deleteTag(g.id), () => {
+    store.tags.splice(i, 0, g)
+    tagged.forEach(x => x.tagIds.push(g.id))
+  })
 }
 
 // ---- items
 export function saveItem(data) {
-  const ts = now()
-  if (data.id) Object.assign(item(data.id), data, { updatedAt: ts, updatedBy: store.me })
-  else store.items.push({ ...data, id: uid(), createdBy: store.me, updatedBy: store.me, createdAt: ts, updatedAt: ts })
+  const existing = data.id ? item(data.id) : null
+  if (existing) {
+    const before = JSON.parse(JSON.stringify(existing))
+    Object.assign(existing, data, { updatedAt: now(), updatedBy: store.me })
+    touch(data.tripId)
+    push(() => api.updateItem(existing, before.tagIds), () => Object.assign(existing, before))
+    return existing
+  }
+  const it = reactive({
+    regionId: null, links: [], images: [], note: '', visited: false,
+    status: 'todo', plannedStore: '', tagIds: [],
+    ...data,
+    id: data.id ?? uid(),
+    createdBy: store.me, updatedBy: store.me, createdAt: now(), updatedAt: now(),
+  })
+  store.items.push(it)
   touch(data.tripId)
+  push(() => api.createItem(it, store.me), () => {
+    const i = store.items.indexOf(it)
+    if (i >= 0) store.items.splice(i, 1)
+  })
+  return it
 }
-export function deleteItem(id) { store.items.splice(store.items.findIndex(i => i.id === id), 1) }
+
+export function deleteItem(id) {
+  const i = store.items.findIndex(x => x.id === id)
+  if (i < 0) return
+  const [removed] = store.items.splice(i, 1)
+  push(() => api.deleteItem(id), () => store.items.splice(i, 0, removed))
+}
+
 // F-12: copy, remap tags by name to my own tags, reset status.
 export function copyItem(src, target) {
-  const tagIds = src.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean).map(n => ensureTag(src.tripId, n)?.id).filter(Boolean)
-  saveItem({ ...JSON.parse(JSON.stringify(src)), id: undefined, ownerUserId: target === 'shared' ? null : store.me, tagIds, visited: false, status: 'todo' })
+  const tagIds = src.tagIds
+    .map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean)
+    .map(n => ensureTag(src.tripId, n)?.id).filter(Boolean)
+  const clone = JSON.parse(JSON.stringify(src))
+  delete clone.id
+  return saveItem({ ...clone, ownerUserId: target === 'shared' ? null : store.me, tagIds, visited: false, status: 'todo' })
 }
+
 // F-19 / F-36 / F-33: optimistic status toggle, queued while offline.
 export function setStatus(it, patch) {
+  const before = { visited: it.visited, status: it.status }
   Object.assign(it, patch, { updatedAt: now(), updatedBy: store.me })
-  if (store.offline) store.pending = store.pending.filter(p => p.id !== it.id).concat({ id: it.id, ...patch })
+  if (store.offline) {
+    store.pending = store.pending.filter(p => p.id !== it.id).concat({ id: it.id, ...patch })
+    return
+  }
+  push(() => api.patchItem(it.id, patch), () => Object.assign(it, before))
 }
-watch(() => store.offline, off => {
-  if (off) return
-  if (store.pending.length) { toast(`已同步 ${store.pending.length} 筆變更`); store.pending = [] }
+
+// 回到線上：把離線期間累積的狀態切換依序送出
+watch(() => store.offline, async off => {
+  if (off || !store.pending.length) { if (!off) store.syncedAt = now(); return }
+  const queue = store.pending.slice()
+  store.pending = []
+  let failed = 0
+  for (const p of queue) {
+    try { await api.patchItem(p.id, p) } catch { failed++ }
+  }
+  toast(failed ? `同步完成，${failed} 筆失敗（項目可能已被刪除）` : `已同步 ${queue.length} 筆變更`)
   store.syncedAt = now()
+  if (failed) refresh()
 })
 
 // ---- invites & members
 export function createInvite(tripId) {
-  const i = { id: uid(), tripId, token: uid() + uid() + uid(), createdBy: store.me, expiresAt: daysFromNow(7), revokedAt: null }
-  store.invites.push(i)
-  return i
+  const token = (uid() + uid()).replaceAll('-', '')
+  const inv = reactive({
+    id: uid(), tripId, token, createdBy: store.me,
+    expiresAt: new Date(Date.now() + 7 * 864e5).toISOString(), revokedAt: null,
+  })
+  store.invites.push(inv)
+  push(() => api.createInvite(tripId, store.me, inv.id, token), () => {
+    const i = store.invites.indexOf(inv)
+    if (i >= 0) store.invites.splice(i, 1)
+  })
+  return inv
 }
 export const inviteValid = i => i && !i.revokedAt && i.expiresAt > now()
-export function revokeInvite(id) { store.invites.find(i => i.id === id).revokedAt = now() }
-export function acceptInvite(token) {
-  const inv = store.invites.find(i => i.token === token)
-  const m = store.members.find(m => m.tripId === inv.tripId && m.userId === store.me)
-  if (m) Object.assign(m, { status: 'active', leftAt: null })
-  else store.members.push({ tripId: inv.tripId, userId: store.me, role: 'member', status: 'active', joinedAt: now(), leftAt: null })
-  return inv.tripId
+export function revokeInvite(id) {
+  const inv = store.invites.find(i => i.id === id)
+  if (!inv) return
+  inv.revokedAt = now()
+  push(() => api.revokeInvite(id), () => { inv.revokedAt = null })
 }
+export const invitePreview = api.invitePreview
+
+export async function acceptInvite(token) {
+  try {
+    const tripId = await api.acceptInvite(token)
+    await refresh()
+    return tripId
+  } catch (err) {
+    toast(err.message)
+    return null
+  }
+}
+
 export function removeMember(tripId, userId) {
-  Object.assign(store.members.find(m => m.tripId === tripId && m.userId === userId), { status: 'left', leftAt: now() })
+  const m = store.members.find(x => x.tripId === tripId && x.userId === userId)
+  if (!m) return
+  const before = { status: m.status, leftAt: m.leftAt }
+  Object.assign(m, { status: 'left', leftAt: now() })
+  push(() => api.setMemberStatus(tripId, userId, 'left'), () => Object.assign(m, before))
 }
 export const leaveTrip = tripId => removeMember(tripId, store.me)
 
-// ---- F-14 / F-28 link preview (mocked; real one is a serverless function with SSRF checks)
-const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|\[?::1|\[?fc|\[?fd|\[?fe80)/i
-const CANNED = [
-  { test: /maps\.app\.goo\.gl|goo\.gl\/maps|google\.[a-z.]+\/maps/, title: '一蘭 新宿中央東口店', image: pic('ichiran-shinjuku').url, description: '24 小時營業的豚骨拉麵，單人座席，可加點替玉。' },
-  { test: /instagram\.com/, title: 'HARBS 澀谷店', image: pic('harbs-cake').url, description: '水果千層蛋糕是招牌，下午常需候位。' },
-  { test: /tabelog\.com/, title: '麵屋一燈', image: pic('menya-itto').url, description: '濃厚魚介沾麵名店，Tabelog 3.9。' },
-]
-export function fetchPreview(url) {
-  return new Promise((resolve, reject) => {
-    let u
-    try { u = new URL(url) } catch { return reject(new Error('invalid')) }
-    if (!/^https?:$/.test(u.protocol) || PRIVATE_HOST.test(u.hostname)) return reject(new Error('blocked'))
-    const hit = CANNED.find(c => c.test.test(url))
-    setTimeout(() => resolve(hit
-      ? { title: hit.title, image: hit.image, description: hit.description }
-      : { title: u.hostname.replace(/^www\./, ''), image: pic(encodeURIComponent(u.hostname)).url, description: '' }), 900)
-  })
+// ---- F-14 / F-28 連結預覽。真的抓網頁的邏輯在 api/preview.js（Vercel function）。
+export async function fetchPreview(url) {
+  const res = await fetch('/api/preview?url=' + encodeURIComponent(url))
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error === 'blocked' ? 'blocked' : 'unreachable')
+  }
+  return res.json()
 }

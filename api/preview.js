@@ -134,6 +134,11 @@ export default async function handler(req, res) {
       const { res: r, url } = await safeFetch(target, ac)
       if (!r.ok) throw new Error('status_' + r.status)
       const ct = r.headers.get('content-type') || ''
+      // F-28：使用者也可能直接貼圖片網址，那就沒有 OG 可以解，整包當圖片回去
+      if (ct.startsWith('image/')) {
+        const buf = await readCapped(r, MAX_IMAGE)
+        return { image: `data:${ct.split(';')[0].trim()};base64,${buf.toString('base64')}`, url }
+      }
       if (!/text\/html|application\/xhtml/i.test(ct)) throw new Error('not_html')
       return { html: toText(await readCapped(r, MAX_PAGE), ct), url }
     })
@@ -141,6 +146,12 @@ export default async function handler(req, res) {
     const msg = String(e?.message || e)
     const code = msg === 'blocked' || msg === 'protocol' ? 403 : 502
     return res.status(code).json({ error: msg === 'blocked' ? 'blocked' : 'unreachable' })
+  }
+
+  // 直接貼圖片網址的情況：沒有標題也沒有描述，只有圖
+  if (page.image) {
+    res.setHeader('cache-control', 'public, max-age=600')
+    return res.status(200).json({ title: '', description: '', image: page.image })
   }
 
   const title = meta(page.html, 'og:title')

@@ -14,7 +14,7 @@ const it = computed(() => getItem(route.params.itemId))
 if (!it.value) router.replace(`/trips/${tripId}`)
 
 const editable = computed(() => it.value.ownerUserId === null || it.value.ownerUserId === store.me)
-const images = computed(() => (it.value.images.length ? it.value.images : it.value.urlImage ? [{ url: it.value.urlImage }] : []))
+const images = computed(() => it.value.images ?? [])
 const region = computed(() => store.regions.find(r => r.id === it.value.regionId)?.name)
 const tags = computed(() => it.value.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean))
 const links = computed(() => it.value.links ?? [])

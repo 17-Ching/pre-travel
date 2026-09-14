@@ -2,8 +2,8 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhX, PhLink, PhImage, PhPlus } from '@phosphor-icons/vue'
-import { store, item as getItem, regionsOf, myTags, ensureTag, addRegion, saveItem, fetchPreview, tagColor, shrinkImage, MAX, toast,
-  MAX_LINKS, newLink, sourceLabel } from '../store'
+import { store, item as getItem, regionsOf, myTags, ensureTag, addRegion, saveItem, fetchPreview, tagColor, toast,
+  uploadItemImage, uploadImageFromDataUrl, MAX_LINKS, newLink, sourceLabel } from '../store'
 import TopBar from '../components/TopBar.vue'
 
 const route = useRoute(), router = useRouter()
@@ -13,7 +13,7 @@ const type = existing?.type ?? (route.query.type === 'shopping' ? 'shopping' : '
 const qRegion = route.query.region
 const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
   tripId, type, ownerUserId: route.query.tab === 'shared' ? null : store.me,
-  title: '', links: [newLink()], urlImage: '', regionId: qRegion && qRegion !== 'all' && qRegion !== 'none' ? qRegion : null,
+  title: '', links: [newLink()], regionId: qRegion && qRegion !== 'all' && qRegion !== 'none' ? qRegion : null,
   images: [], note: '', visited: false, status: 'todo', plannedStore: '', tagIds: [],
 })
 
@@ -43,17 +43,19 @@ async function onUrl(l) {
     previews.value[l.id] = { state: 'ok', url, data: d }
     if (!l.title.trim()) l.title = d.title
     if (!f.value.title.trim()) f.value.title = d.title
-    if (!f.value.urlImage) f.value.urlImage = d.image
+    // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）
+    if (d.image && !f.value.images.length) {
+      try { f.value.images.push(await uploadImageFromDataUrl(tripId, d.image)) } catch { /* 有標題就夠用了 */ }
+    }
   } catch { previews.value[l.id] = { state: 'fail', url } }
 }
 const onPaste = l => setTimeout(() => onUrl(l))
-function clearPreview() { f.value.urlImage = '' }
 function addDesc(l) {
   const d = previews.value[l.id]?.data?.description
   if (d) f.value.note = (f.value.note ? f.value.note + '\n' : '') + d
 }
 
-// F-27 圖片：前端壓縮後存 data URL（objectURL 重整就失效）。
+// F-27 圖片：前端壓縮後直接上傳 bucket，資料庫只存路徑
 const busy = ref(false)
 async function addFiles(e) {
   const files = [...e.target.files]
@@ -62,20 +64,22 @@ async function addFiles(e) {
   for (const file of files) {
     if (f.value.images.length >= 5) { toast('每個項目最多 5 張圖片'); break }
     if (file.size > 20 * 1024 * 1024) { toast(`${file.name} 超過 20 MB`); continue }
-    try { f.value.images.push(await shrinkImage(file, MAX.item)) } catch { toast(`${file.name} 讀不到`) }
+    try { f.value.images.push(await uploadItemImage(tripId, file)) } catch (err) { toast(err.message || `${file.name} 讀不到`) }
   }
   busy.value = false
 }
-// F-28 貼圖片網址：這裡仍然只存外部網址。要轉成自己的副本必須由後端下載
-// （瀏覽器抓跨網域圖片會污染 canvas，toDataURL 直接 throw），所以留給接 API 時處理。
+// F-28 貼圖片網址：由後端下載再轉存，因為瀏覽器抓跨網域圖片會污染 canvas
 async function addImageUrl() {
   const url = prompt('貼上圖片網址')
   if (!url) return
   if (f.value.images.length >= 5) return toast('每個項目最多 5 張圖片')
+  busy.value = true
   try {
     const d = await fetchPreview(url)
-    f.value.images.push({ url: /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url) ? url : d.image, w: 800, h: 600 })
-  } catch { toast('無法取得圖片') }
+    if (!d.image) throw new Error('這個網址沒有圖片')
+    f.value.images.push(await uploadImageFromDataUrl(tripId, d.image))
+  } catch (err) { toast(err.message === 'blocked' ? '這個網址不允許存取' : '無法取得圖片') }
+  busy.value = false
 }
 
 const canSave = computed(() => f.value.title.trim())
@@ -117,12 +121,6 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
         <PhPlus :size="16" weight="bold" />新增連結
       </button>
 
-      <!-- 縮圖由第一個抓到預覽的連結提供，整個項目共用一張 -->
-      <div v-if="f.urlImage" class="mt-3 flex items-center gap-3 rounded-xl border border-line bg-card p-2.5">
-        <img :src="f.urlImage" alt="" class="size-14 shrink-0 rounded-lg bg-line object-cover" />
-        <p class="min-w-0 flex-1 text-[13px] text-muted">連結預覽圖，會當成卡片縮圖</p>
-        <button class="icon-btn size-8 shrink-0 text-muted" aria-label="清除預覽圖" @click="clearPreview"><PhX :size="16" /></button>
-      </div>
     </div>
 
     <div>

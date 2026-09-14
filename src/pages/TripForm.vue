@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhX, PhCaretRight, PhImage } from '@phosphor-icons/vue'
-import { store, trip, isOwner, createTrip, updateTrip, deleteTrip, COUNTRIES, flag, countryName, shrinkImage, MAX, toast } from '../store'
+import { store, trip, isOwner, createTrip, updateTrip, deleteTrip, COUNTRIES, flag, countryName, toast } from '../store'
 import TopBar from '../components/TopBar.vue'
 
 const route = useRoute(), router = useRouter()
@@ -10,7 +10,9 @@ const editing = !!route.params.tripId
 const t = editing ? trip(route.params.tripId) : null
 if (editing && !isOwner(route.params.tripId)) router.replace(`/trips/${route.params.tripId}`)
 
-const form = ref({ name: t?.name ?? '', country: t?.country ?? '', start: t?.start ?? '', end: t?.end ?? '', cover: t?.cover ?? null })
+// coverFile 是還沒上傳的原始檔，cover 只是要顯示的網址（既有封面或本機預覽）
+const form = ref({ name: t?.name ?? '', country: t?.country ?? '', start: t?.start ?? '', end: t?.end ?? '', cover: t?.cover ?? null, coverFile: null })
+const busy = ref(false)
 const q = ref('')
 const matches = computed(() => {
   const s = q.value.trim().toLowerCase()
@@ -19,16 +21,31 @@ const matches = computed(() => {
 const canSave = computed(() => form.value.name.trim() && form.value.country)
 const itemCount = computed(() => store.items.filter(i => i.tripId === t?.id).length)
 
-async function pickCover(e) {
+function pickCover(e) {
   const f = e.target.files[0]
   e.target.value = ''
   if (!f) return
   if (f.size > 20 * 1024 * 1024) return toast('圖片超過 20 MB')
-  try { form.value.cover = (await shrinkImage(f, MAX.cover)).url } catch { toast('這張圖讀不到，換一張試試') }
+  // 縮圖與上傳都等按下儲存才做，選了又反悔就不會留下垃圾檔
+  form.value.coverFile = f
+  form.value.cover = URL.createObjectURL(f)
 }
-function save() {
-  if (editing) { updateTrip(t.id, form.value); router.back() }
-  else router.replace(`/trips/${createTrip(form.value)}`)
+function clearCover() { form.value.coverFile = null; form.value.cover = null }
+
+async function save() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    if (editing) {
+      await updateTrip(t.id, form.value)
+      router.back()
+    } else {
+      const id = await createTrip(form.value)
+      if (id) router.replace(`/trips/${id}`)
+    }
+  } finally {
+    busy.value = false
+  }
 }
 function remove() {
   if (confirm(`確定刪除「${t.name}」？\n裡面的 ${itemCount.value} 個項目會一起刪除，無法復原。`)) { deleteTrip(t.id); router.replace('/') }
@@ -73,7 +90,7 @@ const links = [['members', '成員與邀請'], ['regions', '地區'], ['tags', '
       <span class="label">封面圖（選填）</span>
       <div v-if="form.cover" class="relative overflow-hidden rounded-xl">
         <img :src="form.cover" alt="" class="aspect-[16/9] w-full bg-line object-cover" />
-        <button class="icon-btn absolute right-2 top-2 size-8 bg-card/90" aria-label="移除封面" @click="form.cover = null"><PhX :size="16" /></button>
+        <button class="icon-btn absolute right-2 top-2 size-8 bg-card/90" aria-label="移除封面" @click="clearCover"><PhX :size="16" /></button>
       </div>
       <label v-else class="flex aspect-[16/9] cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line bg-card text-muted">
         <PhImage :size="28" /><span class="text-[13px]">選擇圖片</span>
@@ -92,6 +109,8 @@ const links = [['members', '成員與邀請'], ['regions', '地區'], ['tags', '
   </main>
 
   <div class="fixed inset-x-0 bottom-0 z-30 mx-auto max-w-[720px] border-t border-line bg-surface px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
-    <button class="btn-primary h-12 w-full" :disabled="!canSave" @click="save">{{ editing ? '儲存' : '建立旅程' }}</button>
+    <button class="btn-primary h-12 w-full" :disabled="!canSave || busy" @click="save">
+      {{ busy ? '儲存中…' : editing ? '儲存' : '建立旅程' }}
+    </button>
   </div>
 </template>

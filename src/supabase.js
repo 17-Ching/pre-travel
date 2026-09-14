@@ -28,7 +28,11 @@ export function sb() {
 // Supabase Auth 底層只認 email，所以把帳號接上一個固定的假網域。
 // 使用者從頭到尾不會看到也不用輸入 email。
 // 代價：沒有信箱就沒有「忘記密碼」自助流程，要在 Supabase 後台幫人重設。
-const USER_DOMAIN = 'pretravel.local'
+// 必須是合法的頂級網域。實測 Supabase 會拒絕 @pretravel.local（Email address is invalid），
+// .local 不是真的 TLD。這個網域只是拿來組出合法的 email 格式，
+// Confirm email 關掉後 Supabase 不會真的寄信到這裡。
+// 注意：這個值一旦有人註冊就不能再改，改了等於所有既有帳號都登不進去。
+const USER_DOMAIN = 'pretravel.app'
 const NOT_CONFIGURED = '還沒設定後端連線，請看 .env.example'
 // 小寫化只用在登入比對的 email 上。存進 profiles 的帳號保留使用者打的原樣，
 // 唯一性由 schema.sql 的 `unique index on (lower(username))` 負責，

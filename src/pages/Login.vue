@@ -2,16 +2,14 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhAirplaneTilt, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
-import { store, login, resetDemo } from '../store'
+import { signIn, signUp } from '../store'
 import { validateCredentials } from '../auth-rules'
-import Avatar from '../components/Avatar.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
 
 const route = useRoute(), router = useRouter()
 // 插畫放 public/illustration.png（去背 PNG）。還沒放檔案時退回圖示，畫面不會破。
 const ART = '/illustration.png'
 const art = ref(true)
-const demo = ref(false)
 
 const mode = ref('signin') // signin | signup
 const username = ref('')
@@ -19,6 +17,7 @@ const password = ref('')
 const displayName = ref('')
 const showPw = ref(false)
 const error = ref('')
+const busy = ref(false)
 const isSignup = computed(() => mode.value === 'signup')
 
 function toggleMode() {
@@ -26,17 +25,21 @@ function toggleMode() {
   error.value = ''
 }
 
-// 原型階段：驗證是真的，送出後一律進示範帳號。
-// 後端 session 接上 Supabase 時，這裡換成 signIn / signUp（都回傳 { error }）。
-function submit() {
+// 送出鍵要 disable：這是網路請求，連點會送出好幾次註冊
+async function submit() {
+  if (busy.value) return
   error.value = validateCredentials(username.value, password.value)
   if (error.value) return
-  go('u1')
-}
-
-function go(id) {
-  login(id)
-  router.replace(route.query.redirect || '/')
+  busy.value = true
+  try {
+    const { error: err } = isSignup.value
+      ? await signUp(username.value, password.value, displayName.value)
+      : await signIn(username.value, password.value)
+    if (err) { error.value = err; return }
+    router.replace(route.query.redirect || '/')
+  } finally {
+    busy.value = false
+  }
 }
 </script>
 
@@ -96,9 +99,9 @@ function go(id) {
 
       <p v-if="error" role="alert" class="text-[13px] font-medium text-danger">{{ error }}</p>
 
-      <button type="submit"
-        class="mt-1 h-13 w-full rounded-full bg-accent text-[16px] font-semibold text-accent-fg shadow-e2 transition duration-150 active:scale-[0.97]">
-        {{ isSignup ? '建立帳號' : '登入' }}
+      <button type="submit" :disabled="busy"
+        class="mt-1 h-13 w-full rounded-full bg-accent text-[16px] font-semibold text-accent-fg shadow-e2 transition duration-150 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-60">
+        {{ busy ? '請稍候…' : isSignup ? '建立帳號' : '登入' }}
       </button>
     </form>
 
@@ -109,17 +112,9 @@ function go(id) {
       </button>
     </p>
 
-    <!-- 原型用的帳號切換，收起來不佔版面 -->
-    <div class="relative mt-5 text-center">
-      <button class="text-[12px] text-muted underline underline-offset-2" @click="demo = !demo">
-        {{ demo ? '收起' : '原型：切換示範帳號' }}
-      </button>
-      <div v-if="demo" class="mt-3 flex items-center justify-center gap-4 text-[12px] text-muted">
-        <button v-for="u in store.users" :key="u.id" class="flex flex-col items-center gap-1 transition active:scale-90" @click="go(u.id)">
-          <Avatar :user="u" :size="34" /><span>{{ u.name }}</span>
-        </button>
-        <button class="underline underline-offset-2" @click="resetDemo">重設</button>
-      </div>
-    </div>
+    <!-- 沒有信箱就沒有自助的忘記密碼，先講清楚，免得有人事後才發現 -->
+    <p v-if="isSignup" class="relative mt-3 text-center text-[12px] leading-relaxed text-muted">
+      不需要 Email。密碼請自己記好，忘記的話要請專案擁有者協助重設。
+    </p>
   </main>
 </template>

@@ -8,7 +8,8 @@ import Avatar from './Avatar.vue'
 const props = defineProps({ item: Object, editable: Boolean, showAuthor: Boolean })
 const emit = defineEmits(['status', 'visited', 'menu'])
 
-const thumb = computed(() => props.item.images[0]?.url || props.item.urlImage || '')
+// 連結預覽圖在儲存時就被轉存成第一張圖片了，這裡不用再管外部網址
+const thumb = computed(() => props.item.images[0]?.url || '')
 const region = computed(() => store.regions.find(r => r.id === props.item.regionId)?.name)
 const tags = computed(() => props.item.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean))
 const done = computed(() => (props.item.type === 'shopping' ? props.item.status === 'bought' : props.item.visited))

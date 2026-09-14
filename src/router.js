@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { store } from './store'
+import { store, bootstrap } from './store'
+
+// 只跑一次，之後每次導航都等同一個 promise
+const ready = bootstrap()
 import Login from './pages/Login.vue'
 import Trips from './pages/Trips.vue'
 import TripForm from './pages/TripForm.vue'
@@ -31,7 +34,11 @@ export const router = createRouter({
   ],
 })
 
-// F-01: unauthenticated → login, then back to the requested URL.
-router.beforeEach(to => {
+// F-01：未登入導去登入頁，登入後回原本要開的網址。
+// 一定要先等 bootstrap 讀完既有的 session，否則重新整理時 store.me 還是 null，
+// 已登入的人會被自己的守衛踢回登入頁。
+router.beforeEach(async to => {
+  await ready
   if (!store.me && to.path !== '/login') return { path: '/login', query: { redirect: to.fullPath } }
+  if (store.me && to.path === '/login') return '/'
 })

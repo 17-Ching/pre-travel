@@ -11,7 +11,8 @@
 -- ---------- 1. 資料表 ----------
 
 -- 帳號密碼登入，不收 email。Supabase Auth 底層仍需要 email 格式，
--- 前端把帳號接上固定假網域（<帳號>@pretravel.local），使用者看不到也不用輸入。
+-- 前端把帳號接上固定假網域（<帳號>@pretravel.app），使用者看不到也不用輸入。
+-- 網域必須是合法 TLD，實測 .local 會被 Supabase 判定為無效 email。
 create table if not exists public.profiles (
   id           uuid primary key references auth.users on delete cascade,
   username     text,
@@ -332,6 +333,20 @@ begin
   insert into public.trip_members (trip_id, user_id, role, status)
   values (new_id, auth.uid(), 'owner', 'active');
   return new_id;
+end $$;
+
+-- F-04：軟刪除必須走 RPC，不能讓前端直接 update trips set deleted_at。
+-- 原因是 PostgreSQL 對 UPDATE 會把 SELECT 政策的條件「同時套用在新列上」，
+-- 而 trips_select 含 deleted_at is null，所以一設 deleted_at 新列就不符合自己的讀取政策，
+-- 整句會被擋成 new row violates row-level security policy。
+-- security definer 繞過 RLS，擁有者檢查改在函式裡自己做。
+create or replace function public.delete_trip(p_trip_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_trip_owner(p_trip_id) then
+    raise exception 'not_owner';
+  end if;
+  update public.trips set deleted_at = now() where id = p_trip_id and deleted_at is null;
 end $$;
 
 -- F-06：邀請頁在加入之前還不是成員，讀不到 trips / profiles，所以用 RPC 回傳需要顯示的部分
