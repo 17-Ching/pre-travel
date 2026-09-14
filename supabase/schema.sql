@@ -34,8 +34,10 @@ create table if not exists public.trips (
   name         text not null check (char_length(name) between 1 and 50),
   country_code text not null check (country_code ~ '^[A-Z]{2}$'),
   cover_path   text,
-  start_date   date,
-  end_date     date,
+  -- v2.0：改為必填（Q9），行程的「天」是由起訖日自動產生的
+  start_date   date not null,
+  end_date     date not null,
+  constraint trip_dates_ordered check (end_date >= start_date),
   owner_id     uuid not null references public.profiles on delete cascade,
   deleted_at   timestamptz,
   created_at   timestamptz not null default now(),
@@ -83,8 +85,8 @@ create table if not exists public.tags (
 create table if not exists public.items (
   id              uuid primary key default gen_random_uuid(),
   trip_id         uuid not null references public.trips on delete cascade,
-  -- null = 共同分頁；否則是該使用者的個人分頁
-  owner_user_id   uuid references public.profiles on delete cascade,
+  -- v2.0：共同分頁移除（Q8，行程取代它），項目一定屬於某一個人的清單分頁
+  owner_user_id   uuid not null references public.profiles on delete cascade,
   type            text not null check (type in ('place', 'shopping')),
   title           text not null check (char_length(title) between 1 and 100),
   region_id       uuid references public.regions on delete set null,
@@ -107,12 +109,64 @@ create table if not exists public.item_tags (
   primary key (item_id, tag_id)
 );
 
+-- ItineraryEntry（PRD §4.1）。行程是全隊共用一份，不分個人分頁，
+-- 所以這張表沒有 owner_user_id，權限只看「是不是這個專案的 active 成員」。
+create table if not exists public.itinerary_entries (
+  id             uuid primary key default gen_random_uuid(),
+  trip_id        uuid not null references public.trips on delete cascade,
+  date           date not null,
+  section        text not null check (section in ('schedule', 'meal')),
+  slot           text not null,
+  kind           text not null default 'place' check (kind in ('place', 'transport')),
+  -- 引用不是複製（Q10）。項目被刪時不連鎖刪這一列，見下方 F-47 的觸發器。
+  item_id        uuid references public.items on delete set null,
+  title          text not null default '' check (char_length(title) <= 100),
+  transport_mode text not null default '' check (char_length(transport_mode) <= 30),
+  -- D8：純 TIME 不做時區換算。在台灣排、在日本看，用 timestamp 會整份差幾小時。
+  start_time     time,
+  end_time       time,
+  note           text not null default '' check (char_length(note) <= 500),
+  done           boolean not null default false,
+  sort_order     int not null default 0,
+  created_by     uuid not null references public.profiles on delete cascade,
+  updated_by     uuid references public.profiles on delete set null,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+
+  -- slot 的合法值取決於 section（PRD §4.1）
+  constraint slot_matches_section check (
+    (section = 'schedule' and slot in ('morning', 'afternoon', 'evening'))
+    or (section = 'meal' and slot in ('breakfast', 'lunch', 'snack', 'dinner', 'late_night'))
+  ),
+  -- 餐食區沒有交通類型（F-42）
+  constraint meal_has_no_transport check (section <> 'meal' or kind = 'place'),
+  -- 交通項目不引用清單地點（F-39）
+  constraint transport_has_no_item check (kind <> 'transport' or item_id is null),
+  -- 沒有引用就必須自己有標題（F-38）
+  constraint title_or_item_required check (item_id is not null or char_length(btrim(title)) > 0),
+  constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time)
+);
+
+-- TripDay：只在真的寫備註時才會有資料列（PRD §4.1）
+create table if not exists public.trip_days (
+  trip_id    uuid not null references public.trips on delete cascade,
+  date       date not null,
+  note       text not null default '' check (char_length(note) <= 500),
+  updated_by uuid references public.profiles on delete set null,
+  updated_at timestamptz not null default now(),
+  primary key (trip_id, date)
+);
+
 create index if not exists items_trip_idx        on public.items (trip_id);
 create index if not exists items_owner_idx       on public.items (trip_id, owner_user_id, type);
 create index if not exists members_user_idx      on public.trip_members (user_id);
 create index if not exists tags_trip_user_idx    on public.tags (trip_id, user_id);
 create index if not exists regions_trip_idx      on public.regions (trip_id);
 create index if not exists item_tags_tag_idx     on public.item_tags (tag_id);
+-- PRD §4.1 建議的索引：打開某一天時就是照這個順序撈
+create index if not exists itinerary_day_idx     on public.itinerary_entries (trip_id, date, section, slot, sort_order);
+-- 反查「這個地點排在哪幾天」，F-41 的重複提示與 F-47 的刪除確認都要用
+create index if not exists itinerary_item_idx    on public.itinerary_entries (item_id);
 
 -- ---------- 2. 觸發器 ----------
 
@@ -167,6 +221,59 @@ drop trigger if exists items_touch on public.items;
 create trigger items_touch before update on public.items
   for each row execute function public.stamp_item();
 
+create or replace function public.stamp_entry()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.updated_at = now();
+  new.updated_by = auth.uid();
+  return new;
+end $$;
+
+drop trigger if exists itinerary_touch on public.itinerary_entries;
+create trigger itinerary_touch before update on public.itinerary_entries
+  for each row execute function public.stamp_entry();
+
+-- F-47：刪掉被行程引用的地點時，行程項目要保留，只斷開引用並把標題留下來。
+-- 這件事一定要在資料庫做，不能放前端：換一台裝置、或由另一個成員刪除時，
+-- 前端那段根本不會執行，行程就會留著指向不存在項目的引用。
+-- BEFORE DELETE 讓我們還讀得到 old.title；跑完之後 FK 的 set null 已經無事可做。
+create or replace function public.detach_itinerary_on_item_delete()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.itinerary_entries
+     set item_id = null,
+         -- 引用中的 entry 標題本來是空的，填入被刪項目的標題當快照
+         title   = case when btrim(title) <> '' then title else old.title end,
+         updated_at = now()
+   where item_id = old.id;
+  return old;
+end $$;
+
+drop trigger if exists items_detach_itinerary on public.items;
+create trigger items_detach_itinerary before delete on public.items
+  for each row execute function public.detach_itinerary_on_item_delete();
+
+-- D1：勾選行程項目的「完成」時，若引用的是勾選者自己的地點就同步寫回 visited；
+-- 引用他人的地點只更新行程的 done，不動對方的資料。
+-- 這裡的 where 條件就是那條規則本身，影響 0 筆正是「別人的項目」的預期結果，
+-- 跟其他地方「0 筆代表被拒絕」的判讀不同，不要在這裡加 must() 之類的檢查。
+create or replace function public.sync_visited_on_done()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.done is distinct from old.done and new.item_id is not null then
+    update public.items
+       set visited = new.done
+     where id = new.item_id
+       and owner_user_id = auth.uid()
+       and type = 'place';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists itinerary_sync_visited on public.itinerary_entries;
+create trigger itinerary_sync_visited after update on public.itinerary_entries
+  for each row execute function public.sync_visited_on_done();
+
 -- ---------- 3. 權限判斷函式 ----------
 -- 全部 security definer：它們自己讀表時繞過 RLS，否則 policy 互相引用會無限遞迴。
 
@@ -211,7 +318,7 @@ returns boolean language sql security definer set search_path = public stable as
     select 1 from public.items it
     where it.id = i
       and public.is_trip_member(it.trip_id)
-      and (it.owner_user_id is null or it.owner_user_id = auth.uid())
+      and it.owner_user_id = auth.uid()
   );
 $$;
 
@@ -225,6 +332,8 @@ alter table public.regions      enable row level security;
 alter table public.tags         enable row level security;
 alter table public.items        enable row level security;
 alter table public.item_tags    enable row level security;
+alter table public.itinerary_entries enable row level security;
+alter table public.trip_days         enable row level security;
 
 -- 讓整份檔案可以重跑：先清掉既有 policy
 do $$
@@ -233,7 +342,7 @@ begin
   for r in
     select policyname, tablename from pg_policies
     where schemaname = 'public'
-      and tablename in ('profiles','trips','trip_members','invites','regions','tags','items','item_tags')
+      and tablename in ('profiles','trips','trip_members','invites','regions','tags','items','item_tags','itinerary_entries','trip_days')
   loop
     execute format('drop policy %I on public.%I', r.policyname, r.tablename);
   end loop;
@@ -288,16 +397,16 @@ create policy items_insert on public.items for insert
   with check (
     public.is_trip_member(trip_id)
     and created_by = auth.uid()
-    and (owner_user_id is null or owner_user_id = auth.uid())
+    and owner_user_id = auth.uid()
   );
 create policy items_update on public.items for update
-  using (public.is_trip_member(trip_id) and (owner_user_id is null or owner_user_id = auth.uid()))
-  with check (public.is_trip_member(trip_id) and (owner_user_id is null or owner_user_id = auth.uid()));
+  using (public.is_trip_member(trip_id) and owner_user_id = auth.uid())
+  with check (public.is_trip_member(trip_id) and owner_user_id = auth.uid());
 -- Q2：共同分頁的項目任何成員都可刪。
 -- 第二條是 §3.3：擁有者可以刪掉已離開成員分頁裡的項目。
 create policy items_delete on public.items for delete
   using (
-    (public.is_trip_member(trip_id) and (owner_user_id is null or owner_user_id = auth.uid()))
+    (public.is_trip_member(trip_id) and owner_user_id = auth.uid())
     or (public.is_trip_owner(trip_id) and public.member_has_left(trip_id, owner_user_id))
   );
 
@@ -318,6 +427,20 @@ create policy item_tags_delete on public.item_tags for delete
     and exists (select 1 from public.tags g where g.id = item_tags.tag_id and g.user_id = auth.uid())
   );
 
+-- 行程：全隊共用一份，任何 active 成員都能增刪改（§3.2）。
+-- 刻意不設個人隔離，行程的價值就在於大家看同一份。
+create policy itinerary_select on public.itinerary_entries for select
+  using (public.is_trip_member(trip_id));
+create policy itinerary_insert on public.itinerary_entries for insert
+  with check (public.is_trip_member(trip_id) and created_by = auth.uid());
+create policy itinerary_update on public.itinerary_entries for update
+  using (public.is_trip_member(trip_id)) with check (public.is_trip_member(trip_id));
+create policy itinerary_delete on public.itinerary_entries for delete
+  using (public.is_trip_member(trip_id));
+
+create policy trip_days_all on public.trip_days for all
+  using (public.is_trip_member(trip_id)) with check (public.is_trip_member(trip_id));
+
 -- ---------- 5. RPC ----------
 
 -- F-03：建專案與寫入擁有者成員資格必須同一筆交易，否則中斷時會出現沒有成員的孤兒專案
@@ -327,6 +450,10 @@ create or replace function public.create_trip(
 declare new_id uuid;
 begin
   if auth.uid() is null then raise exception 'not_authenticated'; end if;
+  -- v2.0：日期必填。少了它行程頁連「有哪幾天」都算不出來，
+  -- 這裡明確擋掉，不要讓前端拿到一句難懂的 not-null violation。
+  if p_start is null or p_end is null then raise exception 'dates_required'; end if;
+  if p_end < p_start then raise exception 'end_before_start'; end if;
   insert into public.trips (name, country_code, start_date, end_date, cover_path, owner_id)
   values (trim(p_name), upper(p_country), p_start, p_end, nullif(p_cover, ''), auth.uid())
   returning id into new_id;

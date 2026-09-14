@@ -118,11 +118,9 @@ do $$ begin
   perform ok((select role from trip_members limit 1) = 'owner', '建立者自動成為擁有者');
 end $$;
 
--- Jean 的個人項目 + 共同項目 + 自己的標籤
+-- Jean 的個人項目與自己的標籤。v2.0 起沒有共同分頁（Q8），項目一定有主人。
 insert into items (trip_id, owner_user_id, type, title, created_by)
   values (:'trip_id', '11111111-1111-1111-1111-111111111111', 'place', '一蘭 新宿', '11111111-1111-1111-1111-111111111111');
-insert into items (trip_id, owner_user_id, type, title, created_by)
-  values (:'trip_id', null, 'place', '蟹道樂（共同）', '11111111-1111-1111-1111-111111111111');
 insert into tags (trip_id, user_id, name)
   values (:'trip_id', '11111111-1111-1111-1111-111111111111', '拉麵');
 
@@ -136,8 +134,8 @@ end $$;
 
 select denied(
   format('insert into items (trip_id, owner_user_id, type, title, created_by) values (%L, %L, %L, %L, %L)',
-         :'trip_id', null, 'place', '非成員亂塞', '33333333-3333-3333-3333-333333333333'),
-  '非成員不能寫入共同分頁');
+         :'trip_id', '33333333-3333-3333-3333-333333333333', 'place', '非成員亂塞', '33333333-3333-3333-3333-333333333333'),
+  '非成員不能寫入項目');
 
 -- ── Ruby 用邀請連結加入 ─────────────────────────────────────
 set app.uid = '22222222-2222-2222-2222-222222222222';
@@ -150,12 +148,11 @@ end $$;
 select accept_invite('tok-demo') \gset accepted_
 do $$ begin
   perform ok((select count(*) from trips) = 1, '加入後看得到專案');
-  perform ok((select count(*) from items) = 2, '加入後看得到全部項目（含他人分頁）');
+  perform ok((select count(*) from items) = 1, '加入後看得到他人分頁的項目');
 end $$;
 
 -- ── 核心：他人分頁唯讀（F-11 / §3.2）────────────────────────
 select id as jean_item from items where owner_user_id = :'jean' \gset
-select id as shared_item from items where owner_user_id is null \gset
 
 select denied(
   format('update items set title = %L where id = %L', '被 Ruby 改掉', :'jean_item'),
@@ -172,12 +169,14 @@ select denied(
          :'trip_id', :'ruby', 'place', '偽造新增者', :'jean'),
   'created_by 不能冒用別人');
 
--- 共同分頁：任何成員都可改可刪（Q2）
-update items set title = '蟹道樂 道頓堀本店' where id = :'shared_item';
+-- Ruby 自己的分頁可以正常寫，並確認修改者是由觸發器蓋的
+insert into items (trip_id, owner_user_id, type, title, created_by)
+  values (:'trip_id', :'ruby', 'shopping', '合利他命', :'ruby');
+update items set title = '合利他命 EX Plus' where owner_user_id = :'ruby';
 do $$ begin
-  perform ok((select title from items where owner_user_id is null) = '蟹道樂 道頓堀本店',
-    'Ruby 可以改共同分頁的項目');
-  perform ok((select updated_by from items where owner_user_id is null) = '22222222-2222-2222-2222-222222222222',
+  perform ok((select title from items where owner_user_id = '22222222-2222-2222-2222-222222222222') = '合利他命 EX Plus',
+    'Ruby 可以改自己分頁的項目');
+  perform ok((select updated_by from items where owner_user_id = '22222222-2222-2222-2222-222222222222') = '22222222-2222-2222-2222-222222222222',
     '觸發器蓋上真正的修改者，不靠前端自己填');
 end $$;
 
@@ -195,14 +194,97 @@ select denied(
 
 -- 只能貼自己的標籤（§4.2）
 select id as ruby_tag from tags where user_id = :'ruby' \gset
-insert into item_tags (item_id, tag_id) values (:'shared_item', :'ruby_tag');
+select id as ruby_item from items where owner_user_id = :'ruby' \gset
+insert into item_tags (item_id, tag_id) values (:'ruby_item', :'ruby_tag');
 do $$ begin
-  perform ok((select count(*) from item_tags) = 1, '可以把自己的標籤貼到共同分頁項目');
+  perform ok((select count(*) from item_tags) = 1, '可以把自己的標籤貼到自己的項目');
 end $$;
 
 select denied(
   format('insert into item_tags (item_id, tag_id) values (%L, %L)', :'jean_item', :'ruby_tag'),
   '不能把標籤貼到他人分頁的項目');
+
+-- ── 行程：全隊共用一份（§3.2、F-37 到 F-47）────────────────
+set app.uid = '22222222-2222-2222-2222-222222222222';
+
+-- Ruby 把 Jean 的地點排進行程（引用，F-41）
+insert into itinerary_entries (trip_id, date, section, slot, kind, item_id, created_by)
+  values (:'trip_id', '2026-11-13', 'schedule', 'afternoon', 'place', :'jean_item', :'ruby');
+-- 自由輸入一筆交通（F-39）
+insert into itinerary_entries (trip_id, date, section, slot, kind, title, transport_mode, start_time, created_by)
+  values (:'trip_id', '2026-11-13', 'schedule', 'morning', 'transport', '新宿 → 鎌倉', 'JR 橫須賀線', '09:15', :'ruby');
+-- 餐食備選（F-42）
+insert into itinerary_entries (trip_id, date, section, slot, title, created_by)
+  values (:'trip_id', '2026-11-13', 'meal', 'lunch', '隨便一間拉麵', :'ruby');
+insert into trip_days (trip_id, date, note, updated_by)
+  values (:'trip_id', '2026-11-13', '住新宿，記得帶傘', :'ruby');
+
+do $$ begin
+  perform ok((select count(*) from itinerary_entries) = 3, '成員可以新增行程項目（不分個人分頁）');
+  perform ok((select count(*) from trip_days) = 1, '成員可以寫每日備註');
+end $$;
+
+-- slot 與 section 的組合限制（PRD §4.1）
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, title, created_by) values (%L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'lunch', '時段放錯', :'ruby'),
+  'schedule 不能用餐別當 slot');
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, kind, title, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'meal', 'dinner', 'transport', '餐食區的交通', :'ruby'),
+  '餐食區不能有交通類型');
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, kind, item_id, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'evening', 'transport', :'jean_item', :'ruby'),
+  '交通項目不能引用清單地點');
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, created_by) values (%L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'evening', :'ruby'),
+  '沒有引用就必須自己有標題');
+
+-- D1：勾完成時只同步自己的地點
+select id as ref_entry from itinerary_entries where item_id = :'jean_item' \gset
+update itinerary_entries set done = true where id = :'ref_entry';
+do $$ begin
+  perform ok((select done from itinerary_entries where item_id is not null), '行程的完成狀態有更新');
+  perform ok((select visited from items where id = (select item_id from itinerary_entries where item_id is not null)) = false,
+    'D1：引用他人地點時不會動到對方的 visited');
+end $$;
+
+set app.uid = '11111111-1111-1111-1111-111111111111';
+update itinerary_entries set done = false where id = :'ref_entry';
+update itinerary_entries set done = true  where id = :'ref_entry';
+do $$ begin
+  perform ok((select visited from items where id = (select item_id from itinerary_entries where item_id is not null)) = true,
+    'D1：引用自己的地點時會同步寫回 visited');
+end $$;
+
+-- F-47：刪掉被引用的地點，行程項目要保留並留下標題
+set app.uid = '11111111-1111-1111-1111-111111111111';
+delete from items where id = :'jean_item';
+do $$ begin
+  perform ok((select count(*) from itinerary_entries) = 3, 'F-47：刪地點不連鎖刪行程項目');
+  perform ok((select count(*) from itinerary_entries where id = (select id from itinerary_entries where title = '一蘭 新宿')) = 1,
+    'F-47：被刪項目的標題有留在行程上');
+  perform ok((select item_id from itinerary_entries where title = '一蘭 新宿') is null,
+    'F-47：引用已斷開');
+  perform ok((select done from itinerary_entries where title = '一蘭 新宿') = true,
+    'F-47：完成狀態保留');
+end $$;
+
+-- 非成員完全碰不到行程
+set app.uid = '33333333-3333-3333-3333-333333333333';
+do $$ begin
+  perform ok((select count(*) from itinerary_entries) = 0, '非成員看不到行程');
+  perform ok((select count(*) from trip_days) = 0, '非成員看不到每日備註');
+end $$;
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, title, created_by) values (%L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'morning', '亂塞', :'kai'),
+  '非成員不能寫入行程');
+
+-- 交回 Ruby，下面幾段驗的是「一般成員能做什麼」
+set app.uid = '22222222-2222-2222-2222-222222222222';
 
 -- ── 專案設定只有擁有者能動（§3.2）───────────────────────────
 select denied(
@@ -232,15 +314,17 @@ begin
   exception when check_violation then null;
   end;
   perform ok(not failed, '擁有者不能自行離開（要先刪專案）');
-  perform ok((select count(*) from items where owner_user_id = '22222222-2222-2222-2222-222222222222') = 0,
-    '離開的成員沒有留下孤兒項目');
+  -- §3.3：離開成員的分頁保留、變唯讀，項目不會消失
+  perform ok((select count(*) from items where owner_user_id = '22222222-2222-2222-2222-222222222222') = 1,
+    '離開成員的項目保留，其他人仍讀得到');
 end $$;
 
 -- 刪除地區：項目變未分類，不會跟著被刪（§4.2）
 select id as region_tokyo from regions where name = '東京' \gset
 delete from regions where id = :'region_tokyo';
 do $$ begin
-  perform ok((select count(*) from items) = 2, '刪地區不會連帶刪掉項目');
+  -- Jean 的項目在 F-47 那段被刪掉了，剩 Ruby 的那筆
+  perform ok((select count(*) from items) = 1, '刪地區不會連帶刪掉項目');
 end $$;
 
 -- 擁有者軟刪除專案。這裡一定要用 RPC，直接 update 會被自己的 select 政策擋掉
