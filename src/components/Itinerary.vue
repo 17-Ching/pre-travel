@@ -1,9 +1,12 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
-import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPencilSimple, PhWarning } from '@phosphor-icons/vue'
-import { store, tripDays, entriesOf, daySummary, dayNote, setDayNote, addEntry, addEntries, updateEntry,
-  toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, scheduledSlots, toast, regionsOf, user } from '../store'
+import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPencilSimple, PhWarning,
+  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff } from '@phosphor-icons/vue'
+import { store, tripDays, entriesOf, flightsOf, daySummary, dayNote, setDayNote, addEntry, addEntries, updateEntry,
+  toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
+  regionsOf, user, me, tripMembers, item as findItem, newLink, linkLabel, sourceLabel, MAX_LINKS } from '../store'
 import EntryCard from './EntryCard.vue'
+import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
 
 const props = defineProps({ tripId: String })
@@ -28,6 +31,24 @@ const openMeals = ref(new Set())
 const shownMeals = computed(() => meals.value.filter(m => m.entries.length || openMeals.value.has(m.slot)))
 const hiddenMeals = computed(() => meals.value.filter(m => !m.entries.length && !openMeals.value.has(m.slot)))
 
+// ── 航班：出發日與回程日各一區，一天可以有好幾班（同行的人搭不同班）。
+// 已經有航班的日子也要顯示，否則縮短旅程日期（F-46）之後那些航班就看不見了。
+const flights = computed(() => flightsOf(props.tripId, date.value))
+const showFlights = computed(() => {
+  const inRange = days.value.filter(d => !d.outOfRange)
+  return flights.value.length > 0 || date.value === inRange[0]?.date || date.value === inRange.at(-1)?.date
+})
+const flightLabel = computed(() => {
+  const inRange = days.value.filter(d => !d.outOfRange)
+  if (date.value === inRange[0]?.date) return '出發航班'
+  if (date.value === inRange.at(-1)?.date) return '回程航班'
+  return '航班'
+})
+// 誰搭這班：專案成員（離開的成員不列，但已經選到的還是看得到，避免資料無聲消失）
+const members = computed(() => [{ userId: store.me }, ...tripMembers(props.tripId)
+  .filter(m => m.userId !== store.me && m.status === 'active')]
+  .map(m => ({ userId: m.userId, user: m.userId === store.me ? me() : user(m.userId) })))
+
 // 日期列：進頁自動捲到選中那天
 const rail = ref()
 const scrollToDay = () => nextTick(() => rail.value?.querySelector('[data-on="1"]')?.scrollIntoView({ inline: 'center', block: 'nearest' }))
@@ -41,32 +62,46 @@ function openNote() { noteDraft.value = dayNote(props.tripId, date.value); noteO
 function saveNote() { setDayNote(props.tripId, date.value, noteDraft.value); noteOpen.value = false }
 
 // ── 新增 / 編輯行程項目（F-38、F-39）
-const blank = () => ({ title: '', kind: 'place', transportMode: '', startTime: '', endTime: '', note: '' })
-const form = ref(blank())
+const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [], passengerIds: [] })
+const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
 const MODES = ['步行', '電車', '巴士', '計程車', '開車', '飛機', '船']
 
-function openAdd(section, slot) {
+// kind 在開啟時就決定（抽屜裡「自己打一筆」與「加一段交通」是兩個入口），
+// 表單裡不再放類型切換：使用者反映在那裡找不到交通。
+function openAdd(section, slot, kind = 'place') {
   if (store.offline) return toast('需要網路')
-  form.value = blank()
+  form.value = blank(kind)
   formFor.value = { section, slot }
 }
 function openEdit(entry) {
   form.value = { title: entry.itemId ? '' : entry.title, kind: entry.kind, transportMode: entry.transportMode || '',
-    startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '' }
+    startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
+    links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])] }
   formFor.value = { entry }
 }
 const editingRef = computed(() => Boolean(formFor.value?.entry?.itemId)) // 引用的項目標題不可改（F-38）
-const canSaveForm = computed(() => {
+const isFlight = computed(() => form.value.kind === 'flight')
+// 航班的抵達時間可以比起飛早（紅眼班機隔天到），其他項目不行
+const badTimes = computed(() => {
   const f = form.value
-  if (f.endTime && f.startTime && f.endTime < f.startTime) return false
-  return editingRef.value || f.title.trim().length > 0
+  return Boolean(!isFlight.value && f.startTime && f.endTime && f.endTime < f.startTime)
 })
+const canSaveForm = computed(() => !badTimes.value && (editingRef.value || form.value.title.trim().length > 0))
+// 連結在行程這一側是自己的一份，改了不會回寫清單，所以不抓預覽也不動圖片
+function addFormLink() { if (form.value.links.length < MAX_LINKS) form.value.links.push(newLink()) }
+function togglePassenger(id) {
+  const list = form.value.passengerIds
+  const i = list.indexOf(id)
+  i < 0 ? list.push(id) : list.splice(i, 1)
+}
 function submitForm() {
   const f = form.value, ctx = formFor.value
   const patch = {
-    kind: f.kind, transportMode: f.kind === 'transport' ? f.transportMode.trim() : '',
+    kind: f.kind, transportMode: f.kind === 'place' ? '' : f.transportMode.trim(),
     startTime: f.startTime || null, endTime: f.endTime || null, note: f.note.trim(),
+    links: f.links.filter(l => l.url.trim()),
+    passengerIds: f.kind === 'flight' ? [...f.passengerIds] : [],
   }
   if (ctx.entry) updateEntry(ctx.entry, editingRef.value ? patch : { ...patch, title: f.title.trim() })
   else addEntry({ tripId: props.tripId, date: date.value, section: ctx.section, slot: ctx.slot, itemId: null, title: f.title.trim(), ...patch })
@@ -76,7 +111,8 @@ function submitForm() {
 // ── 卡片選單：編輯 / 上下移 / 搬到其他天 / 刪除
 const entryMenu = ref(null)
 const moveFor = ref(null)
-function siblings(e) { return entriesOf(props.tripId, e.date, e.section, e.slot) }
+// 航班自成一區，上下移只在航班之間換，不要動到同一個時段的其他項目
+function siblings(e) { return e.kind === 'flight' ? flightsOf(props.tripId, e.date) : entriesOf(props.tripId, e.date, e.section, e.slot) }
 function nudge(e, dir) {
   const list = siblings(e).map(x => x.id)
   const i = list.indexOf(e.id), j = i + dir
@@ -129,10 +165,11 @@ function elsewhere(itemId) {
 }
 function confirmPick() {
   const ctx = pickFor.value
-  const list = [...picked.value].map(id => ({
-    tripId: props.tripId, date: date.value, section: ctx.section, slot: ctx.slot,
-    kind: 'place', itemId: id, title: '', transportMode: '', startTime: null, endTime: null, note: '',
-  }))
+  // 用 store 查，不是查 pickable：勾選後改了搜尋字串，勾過的項目就不在 pickable 裡了
+  const list = [...picked.value]
+    .map(id => findItem(id))
+    .filter(Boolean)
+    .map(it => entryFromItem(it, { tripId: props.tripId, date: date.value, section: ctx.section, slot: ctx.slot }))
   if (list.length) addEntries(list)   // 一次送出，不迴圈（F-41 可多選）
   pickFor.value = null
 }
@@ -171,8 +208,25 @@ const addFor = ref(null)
       </div>
 
       <p class="text-[13px] tabular-nums text-muted">
-        行程 {{ summary.schedule }} 項・餐食備選 {{ summary.meal }} 間・已完成 {{ summary.done }}
+        <template v-if="summary.flight">航班 {{ summary.flight }} 班・</template>行程 {{ summary.schedule }} 項・餐食備選 {{ summary.meal }} 間・已完成 {{ summary.done }}
       </p>
+
+      <!-- 航班：出發日與回程日各一區。一天可以有好幾班，各自標誰搭 -->
+      <section v-if="showFlights" class="mt-4">
+        <div class="mb-1.5 flex items-center gap-2">
+          <PhAirplaneTakeoff :size="16" class="text-tint" />
+          <h3 class="text-[13px] font-semibold tracking-wide text-muted">{{ flightLabel }}</h3>
+          <span v-if="flights.length" class="text-[12px] tabular-nums text-muted">{{ flights.length }}</span>
+          <button v-if="flights.length" class="ml-auto icon-btn size-7 text-muted" aria-label="再加一班" @click="openAdd('schedule', 'morning', 'flight')">
+            <PhPlus :size="15" weight="bold" />
+          </button>
+        </div>
+        <div v-if="flights.length" class="grid gap-2">
+          <EntryCard v-for="e in flights" :key="e.id" :entry="e" @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
+        </div>
+        <button v-else class="w-full rounded-[12px] border border-dashed border-line py-3 text-[13px] text-muted"
+          @click="openAdd('schedule', 'morning', 'flight')">＋ 加航班</button>
+      </section>
 
       <!-- 每日備註（F-43）：空的時候只有一行淡字 -->
       <button class="mt-2 flex w-full items-start gap-2 rounded-[12px] border border-line bg-card p-2.5 text-left" @click="openNote">
@@ -233,41 +287,37 @@ const addFor = ref(null)
       </section>
     </main>
 
-    <!-- 時段的「＋」：兩個入口（F-38） -->
+    <!-- 時段的「＋」：三個入口（F-38、F-39）。交通獨立一列，藏在表單的類型切換裡沒人找得到 -->
     <Sheet :open="!!addFor" title="加入" @update:open="v => !v && (addFor = null)">
       <button class="row" @click="openPick(addFor.section, addFor.slot); addFor = null">
-        <PhCalendarBlank :size="20" class="text-muted" /><span class="flex-1">從清單選地點</span>
+        <PhCalendarBlank :size="20" class="text-muted" /><span class="flex-1">從願望清單選地點</span>
       </button>
       <button class="row" @click="openAdd(addFor.section, addFor.slot); addFor = null">
         <PhPencilSimple :size="20" class="text-muted" /><span class="flex-1">自己打一筆</span>
       </button>
+      <!-- 餐食備選不能放交通（F-42，資料庫也擋） -->
+      <button v-if="addFor?.section === 'schedule'" class="row" @click="openAdd(addFor.section, addFor.slot, 'transport'); addFor = null">
+        <PhArrowRight :size="20" class="text-tint" weight="bold" /><span class="flex-1">加一段交通</span>
+      </button>
     </Sheet>
 
     <!-- 新增 / 編輯表單（F-38、F-39、F-40） -->
-    <Sheet :open="!!formFor" :title="formFor?.entry ? '編輯' : '新增'" @update:open="v => !v && (formFor = null)">
+    <Sheet :open="!!formFor" :title="formFor?.entry ? '編輯' : isFlight ? '加航班' : form.kind === 'transport' ? '加一段交通' : '新增'" @update:open="v => !v && (formFor = null)">
       <div class="grid gap-3 px-2 pb-2">
         <div v-if="!editingRef">
-          <label class="label" for="e-title">標題</label>
+          <label class="label" for="e-title">{{ isFlight ? '航線' : '標題' }}</label>
           <input id="e-title" v-model="form.title" class="input" maxlength="100"
-            :placeholder="form.kind === 'transport' ? '例：新宿 → 鎌倉' : '要做什麼'" />
+            :placeholder="isFlight ? '例：桃園 → 成田' : form.kind === 'transport' ? '例：新宿 → 鎌倉' : '要做什麼'" />
         </div>
         <p v-else class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
-          這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題要改請到該地點編輯。
+          這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走；下面的備註與連結只屬於行程這一筆。
         </p>
 
-        <!-- 餐食區沒有交通類型（資料庫也擋） -->
-        <div v-if="formFor?.section !== 'meal' && formFor?.entry?.section !== 'meal' && !editingRef">
-          <span class="label">類型</span>
-          <div class="relative grid grid-cols-2 rounded-[12px] bg-surface-2 p-1">
-            <div class="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
-              :style="{ transform: form.kind === 'transport' ? 'translateX(100%)' : 'none' }" aria-hidden="true" />
-            <button v-for="[k, l] in [['place', '一般'], ['transport', '交通']]" :key="k"
-              :class="['relative z-10 h-8 rounded-[9px] text-[14px] font-semibold transition-colors duration-150', form.kind === k ? 'text-ink' : 'text-muted']"
-              @click="form.kind = k">{{ l }}</button>
-          </div>
+        <div v-if="isFlight">
+          <label class="label" for="e-mode">航空公司與班次</label>
+          <input id="e-mode" v-model="form.transportMode" class="input" maxlength="30" placeholder="例：BR189" />
         </div>
-
-        <div v-if="form.kind === 'transport'">
+        <div v-else-if="form.kind === 'transport'">
           <label class="label" for="e-mode">交通方式</label>
           <input id="e-mode" v-model="form.transportMode" class="input" maxlength="30" placeholder="例：JR 橫須賀線" />
           <div class="mt-2 flex flex-wrap gap-1.5">
@@ -275,17 +325,53 @@ const addFor = ref(null)
           </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
-          <div><label class="label" for="e-start">開始時間（選填）</label><input id="e-start" v-model="form.startTime" type="time" class="input" /></div>
-          <div><label class="label" for="e-end">結束時間（選填）</label><input id="e-end" v-model="form.endTime" type="time" class="input" /></div>
+        <!-- 同行的人可能搭不同班，所以每一班各自標誰搭；不選＝全員 -->
+        <div v-if="isFlight">
+          <span class="label">誰搭這班（不選＝全員）</span>
+          <div class="flex flex-wrap gap-2">
+            <button v-for="m in members" :key="m.userId" @click="togglePassenger(m.userId)"
+              :class="['chip-state', form.passengerIds.includes(m.userId) && 'on']">
+              <Avatar :user="m.user" :size="18" />{{ m.user?.name ?? '成員' }}
+            </button>
+          </div>
         </div>
-        <p v-if="form.startTime && form.endTime && form.endTime < form.startTime" class="-mt-1 text-[12px] text-danger">
-          結束時間不能早於開始時間
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="label" for="e-start">{{ isFlight ? '起飛時間（選填）' : '開始時間（選填）' }}</label>
+            <input id="e-start" v-model="form.startTime" type="time" class="input" />
+          </div>
+          <div>
+            <label class="label" for="e-end">{{ isFlight ? '抵達時間（選填）' : '結束時間（選填）' }}</label>
+            <input id="e-end" v-model="form.endTime" type="time" class="input" />
+          </div>
+        </div>
+        <p v-if="badTimes" class="-mt-1 text-[12px] text-danger">結束時間不能早於開始時間</p>
+        <p v-else-if="isFlight && form.startTime && form.endTime && form.endTime < form.startTime" class="-mt-1 text-[12px] text-muted">
+          抵達時間比起飛早，會標示成隔天抵達
         </p>
 
         <div>
-          <label class="label" for="e-note">當天備註（選填）</label>
-          <textarea id="e-note" v-model="form.note" class="input h-20 resize-y py-2.5" maxlength="500" placeholder="只屬於這一天，不會寫回清單的地點" />
+          <label class="label" for="e-note">備註（選填）</label>
+          <textarea id="e-note" v-model="form.note" class="input h-28 resize-y py-2.5" maxlength="2000"
+            :placeholder="isFlight ? '訂位代號、航廈、行李額度…' : '只屬於這一天，不會寫回清單的地點'" />
+        </div>
+
+        <!-- 從清單帶過來的連結也在這裡改，改了不會回寫清單 -->
+        <div>
+          <span class="label">連結（選填，最多 {{ MAX_LINKS }} 個）</span>
+          <div v-if="form.links.length" class="grid gap-2">
+            <div v-for="(l, i) in form.links" :key="l.id" class="rounded-xl border border-line bg-card p-2.5">
+              <div class="flex items-center gap-2">
+                <input v-model="l.title" class="input h-9 min-w-0 flex-1" maxlength="40" placeholder="連結標題（選填）" />
+                <button class="icon-btn size-8 shrink-0 text-muted" aria-label="移除這個連結" @click="form.links.splice(i, 1)"><PhX :size="16" /></button>
+              </div>
+              <input v-model="l.url" type="url" inputmode="url" class="input mt-2 h-9" placeholder="貼上 Google Maps、IG 或網頁連結" />
+            </div>
+          </div>
+          <button v-if="form.links.length < MAX_LINKS" class="btn-ghost mt-2 h-9 w-full text-[14px]" @click="addFormLink">
+            <PhPlus :size="16" weight="bold" />新增連結
+          </button>
         </div>
       </div>
       <template #footer>
@@ -295,8 +381,18 @@ const addFor = ref(null)
 
     <!-- 卡片選單 -->
     <Sheet :open="!!entryMenu" :title="entryMenu ? entryTitle(entryMenu) : ''" @update:open="v => !v && (entryMenu = null)">
+      <!-- 卡片上的備註是截斷的，抽屜裡給完整內容 -->
+      <p v-if="entryMenu?.note" class="mb-1 max-h-48 overflow-auto whitespace-pre-line border-b border-line px-3 pb-3 text-[14px] leading-relaxed text-muted">{{ entryMenu.note }}</p>
+      <!-- 真的 <a>：手機上 Google Maps 連結要能跳到地圖 App（F-15） -->
+      <div v-if="entryMenu?.links?.length" class="mb-1 border-b border-line pb-1">
+        <a v-for="l in entryMenu.links" :key="l.id" :href="l.url" target="_blank" rel="noopener" class="row" @click="entryMenu = null">
+          <PhArrowSquareOut :size="20" class="shrink-0 text-accent" />
+          <span class="min-w-0 flex-1 truncate">{{ linkLabel(l) }}</span>
+          <span v-if="l.title?.trim()" class="shrink-0 text-[13px] text-muted">{{ sourceLabel(l.url) }}</span>
+        </a>
+      </div>
       <button class="row" :disabled="store.offline" @click="openEdit(entryMenu); entryMenu = null">
-        <PhPencilSimple :size="20" class="text-muted" /><span class="flex-1">編輯時間與備註</span>
+        <PhPencilSimple :size="20" class="text-muted" /><span class="flex-1">編輯時間、備註與連結</span>
       </button>
       <template v-if="entryMenu && canNudge(entryMenu)">
         <button class="row" :disabled="store.offline" @click="nudge(entryMenu, -1)">
@@ -320,25 +416,28 @@ const addFor = ref(null)
     <Sheet :open="!!moveFor" title="搬到" @update:open="v => !v && (moveFor = null)">
       <div class="px-2 pb-2">
         <p class="mb-2 mt-1 text-[13px] font-semibold">日期</p>
+        <!-- 航班沒有時段可選，點日期就直接搬 -->
         <div class="flex flex-wrap gap-2">
           <button v-for="d in days" :key="d.date"
-            :class="['chip-region', moveFor?.date === d.date && 'on']"
-            @click="moveFor = { ...moveFor, date: d.date }">
+            :class="['chip-region', moveFor?.kind !== 'flight' && moveFor?.date === d.date && 'on']"
+            @click="moveFor.kind === 'flight' ? doMove({ date: d.date, section: 'schedule', slot: moveFor.slot }) : (moveFor = { ...moveFor, date: d.date })">
             {{ d.date.slice(5).replace('-', '/') }}（{{ d.weekday }}）
           </button>
         </div>
-        <p class="mb-2 mt-4 text-[13px] font-semibold">時段</p>
-        <div class="flex flex-wrap gap-2">
-          <button v-for="[slot, label] in SLOTS" :key="slot" class="chip-state"
-            @click="doMove({ date: moveFor.date, section: 'schedule', slot })">{{ label }}</button>
-        </div>
-        <p class="mb-2 mt-4 text-[13px] font-semibold">餐別</p>
-        <div class="flex flex-wrap gap-2">
-          <button v-for="[slot, label] in MEALS" :key="slot" class="chip-state"
-            :disabled="moveFor?.kind === 'transport'"
-            @click="doMove({ date: moveFor.date, section: 'meal', slot })">{{ label }}</button>
-        </div>
-        <p v-if="moveFor?.kind === 'transport'" class="mt-2 text-[12px] text-muted">交通項目不能放進餐食備選。</p>
+        <template v-if="moveFor?.kind !== 'flight'">
+          <p class="mb-2 mt-4 text-[13px] font-semibold">時段</p>
+          <div class="flex flex-wrap gap-2">
+            <button v-for="[slot, label] in SLOTS" :key="slot" class="chip-state"
+              @click="doMove({ date: moveFor.date, section: 'schedule', slot })">{{ label }}</button>
+          </div>
+          <p class="mb-2 mt-4 text-[13px] font-semibold">餐別</p>
+          <div class="flex flex-wrap gap-2">
+            <button v-for="[slot, label] in MEALS" :key="slot" class="chip-state"
+              :disabled="moveFor?.kind !== 'place'"
+              @click="doMove({ date: moveFor.date, section: 'meal', slot })">{{ label }}</button>
+          </div>
+          <p v-if="moveFor?.kind === 'transport'" class="mt-2 text-[12px] text-muted">交通項目不能放進餐食備選。</p>
+        </template>
       </div>
     </Sheet>
 

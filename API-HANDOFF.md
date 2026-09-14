@@ -246,7 +246,7 @@ src/
     Trips.vue       P-02   旅程列表
     Profile.vue     P-11   個人資料（PRD 沒有，後加的）
     TripForm.vue    P-03   建立 / 編輯專案，封面上傳
-    Trip.vue        P-04   分頁列（行程 / 我的 / 成員）/ 子清單 / 篩選 / 清單
+    Trip.vue        P-04   分頁列（願望清單 / 行程）→ 清單裡再選誰的 / 子清單 / 篩選 / 清單
     ItemForm.vue    P-05   新增 / 編輯項目，連結預覽與圖片上傳
     ItemDetail.vue  P-06
     Members.vue     P-07   成員與邀請
@@ -254,8 +254,8 @@ src/
     Tags.vue        P-09
     Invite.vue      P-10   接受邀請，走 invite_preview RPC
   components/
-    Itinerary.vue   行程分頁的完整版面：日期列、三時段、五餐別、每日備註
-    EntryCard.vue   行程卡片：一般與交通兩種樣式、時間徽章、完成勾選
+    Itinerary.vue   行程分頁的完整版面：日期列、出發／回程航班區、三時段、五餐別、每日備註
+    EntryCard.vue   行程卡片：一般 / 交通 / 航班三種樣式、時間徽章（紅眼班機標 +1）、乘客頭像、完成勾選
     TopBar / Sheet / ItemCard / TagChip / Avatar / ThemeToggle
 ```
 

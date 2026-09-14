@@ -47,7 +47,8 @@ const toEntry = r => ({
   kind: r.kind, itemId: r.item_id, title: r.title ?? '',
   transportMode: r.transport_mode ?? '',
   startTime: hhmm(r.start_time), endTime: hhmm(r.end_time),
-  note: r.note ?? '', done: r.done, order: r.sort_order,
+  links: r.links ?? [], note: r.note ?? '', done: r.done, order: r.sort_order,
+  passengerIds: r.passenger_ids ?? [],
   detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
@@ -61,10 +62,12 @@ const entryRow = e => ({
   kind: e.kind ?? 'place',
   item_id: e.itemId || null,
   title: (e.title ?? '').slice(0, 100),
+  links: (e.links ?? []).filter(l => l.url?.trim()),
   transport_mode: (e.transportMode ?? '').slice(0, 30),
   start_time: e.startTime || null,
   end_time: e.endTime || null,
-  note: (e.note ?? '').slice(0, 500),
+  note: (e.note ?? '').slice(0, 2000),
+  passenger_ids: e.passengerIds ?? [],
   done: Boolean(e.done),
   sort_order: e.order ?? 0,
 })
@@ -281,7 +284,9 @@ export async function updateEntry(id, patch) {
   if ('transportMode' in patch) row.transport_mode = (patch.transportMode ?? '').slice(0, 30)
   if ('startTime' in patch) row.start_time = patch.startTime || null
   if ('endTime' in patch) row.end_time = patch.endTime || null
-  if ('note' in patch) row.note = (patch.note ?? '').slice(0, 500)
+  if ('links' in patch) row.links = (patch.links ?? []).filter(l => l.url?.trim())
+  if ('note' in patch) row.note = (patch.note ?? '').slice(0, 2000)
+  if ('passengerIds' in patch) row.passenger_ids = patch.passengerIds ?? []
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done
   if ('date' in patch) row.date = patch.date

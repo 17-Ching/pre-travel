@@ -115,8 +115,8 @@ export const regionItemCount = r => store.items.filter(i => i.regionId === r.id)
 export const myTags = tripId => store.tags.filter(g => g.tripId === tripId && g.userId === store.me)
 export const tagUsage = g => store.items.filter(i => i.tagIds.includes(g.id)).length
 export const item = id => store.items.find(i => i.id === id)
-// F-09：v2.0 起預設落點是行程，不是自己的清單分頁
-export const prefs = tripId => (store.prefs[tripId] ??= { tab: 'itinerary', type: 'place', region: 'all', status: '', tag: '', q: '' })
+// F-09：分頁只有願望清單／行程兩個，看誰的清單是清單裡的第二層（who）
+export const prefs = tripId => (store.prefs[tripId] ??= { tab: 'list', who: 'me', type: 'place', region: 'all', status: '', tag: '', q: '' })
 const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 
 // ---- 載入
@@ -533,15 +533,25 @@ const byTimeThenOrder = (a, b) => {
   if (b.startTime) return 1
   return a.order - b.order
 }
+// 航班有自己的區塊（出發日／回程日），所以不出現在三個時段的清單裡
 export const entriesOf = (tripId, date, section, slot) => store.entries
-  .filter(e => e.tripId === tripId && e.date === date && e.section === section && e.slot === slot)
+  .filter(e => e.tripId === tripId && e.date === date && e.section === section && e.slot === slot && e.kind !== 'flight')
   .sort(byTimeThenOrder)
+
+// 同一天可以有好幾班：同行的人搭不同班
+export const flightsOf = (tripId, date) => store.entries
+  .filter(e => e.tripId === tripId && e.date === date && e.kind === 'flight')
+  .sort(byTimeThenOrder)
+
+// 紅眼航班：抵達時間比起飛早就是隔天到（資料庫的 end_after_start 對 flight 放行）
+export const arrivesNextDay = e => Boolean(e.kind === 'flight' && e.startTime && e.endTime && e.endTime < e.startTime)
 
 export function daySummary(tripId, date) {
   const list = store.entries.filter(e => e.tripId === tripId && e.date === date)
   return {
-    schedule: list.filter(e => e.section === 'schedule').length,
+    schedule: list.filter(e => e.section === 'schedule' && e.kind !== 'flight').length,
     meal: list.filter(e => e.section === 'meal').length,
+    flight: list.filter(e => e.kind === 'flight').length,
     done: list.filter(e => e.done).length,
   }
 }
@@ -563,8 +573,9 @@ export const scheduledSlots = itemId => store.entries
   .filter(e => e.itemId === itemId)
   .map(({ date, section, slot }) => ({ date, section, slot }))
 
-const nextOrder = (tripId, date, section, slot) =>
-  entriesOf(tripId, date, section, slot).reduce((m, e) => Math.max(m, e.order + 1), 0)
+const nextOrder = (tripId, date, section, slot, kind) =>
+  (kind === 'flight' ? flightsOf(tripId, date) : entriesOf(tripId, date, section, slot))
+    .reduce((m, e) => Math.max(m, e.order + 1), 0)
 
 function buildEntry(d, order) {
   return reactive({
@@ -573,9 +584,10 @@ function buildEntry(d, order) {
     kind: d.kind ?? 'place',
     itemId: d.itemId ?? null,
     title: (d.title ?? '').trim(),
+    links: d.links ?? [],
     transportMode: d.transportMode ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
-    note: d.note ?? '', done: false, order,
+    note: d.note ?? '', passengerIds: d.passengerIds ?? [], done: false, order,
     detachedAt: null,
     createdBy: store.me, updatedBy: store.me,
     createdAt: now(), updatedAt: now(),
@@ -586,14 +598,25 @@ export function addEntry(data) {
   return addEntries([data])[0]
 }
 
+// F-41 從清單加入行程時要建的那一筆。
+// 標題與照片繼續引用（Q10：清單改了行程跟著改），但備註與連結是複製一份 ——
+// 當天想加「今天只買這個」或換一條路線用的地圖連結，不該回頭改到清單本身。
+// 兩個入口（清單卡片選單、行程時段的「從清單選」）都走這裡，規則只有一份。
+export const entryFromItem = (it, { tripId, date, section, slot }) => ({
+  tripId, date, section, slot, kind: 'place', itemId: it.id, title: '',
+  links: JSON.parse(JSON.stringify(it.links ?? [])),
+  note: it.note ?? '',
+  transportMode: '', startTime: null, endTime: null,
+})
+
 // F-41 一次加入多筆。傳進來的順序就是 sort_order 的順序。
 // 一次送出，不拆成多次往返，中途失敗才不會留下加了一半的行程。
 export function addEntries(list) {
   if (!list.length) return []
   const counters = new Map()
   const built = list.map(d => {
-    const key = `${d.date}|${d.section}|${d.slot}`
-    const base = counters.get(key) ?? nextOrder(d.tripId, d.date, d.section, d.slot)
+    const key = `${d.date}|${d.section}|${d.slot}|${d.kind === 'flight' ? 'flight' : ''}`
+    const base = counters.get(key) ?? nextOrder(d.tripId, d.date, d.section, d.slot, d.kind)
     counters.set(key, base + 1)
     return buildEntry(d, base)
   })
@@ -656,7 +679,7 @@ export function reorderEntries(tripId, date, section, slot, orderedIds) {
 // 跨日拖曳 v1 不做，改走卡片選單的「搬到其他天」，都是同一支
 export function moveEntry(entry, target) {
   const before = { date: entry.date, section: entry.section, slot: entry.slot, order: entry.order }
-  const order = nextOrder(entry.tripId, target.date, target.section, target.slot)
+  const order = nextOrder(entry.tripId, target.date, target.section, target.slot, entry.kind)
   Object.assign(entry, target, { order, updatedAt: now(), updatedBy: store.me })
   push(() => api.updateEntry(entry.id, { ...target, order }), () => Object.assign(entry, before))
 }

@@ -27,10 +27,10 @@ const linkify = s => esc(s).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" 
 function remove() {
   if (confirm(`刪除「${it.value.title}」？`)) { deleteItem(it.value.id); router.replace(`/trips/${tripId}`) }
 }
-// v2.0：共同分頁移除（Q8），複製目標只剩自己的清單分頁
+// v2.0：共同分頁移除（Q8），複製目標只剩自己的願望清單
 function copy() {
   copyItem(it.value); copying.value = false
-  toast('已複製到我的分頁', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: 'me' } } })
+  toast('已複製到我的清單', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: 'list', who: 'me' } } })
 }
 const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買到']]
 </script>

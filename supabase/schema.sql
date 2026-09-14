@@ -117,7 +117,11 @@ create table if not exists public.itinerary_entries (
   date           date not null,
   section        text not null check (section in ('schedule', 'meal')),
   slot           text not null,
-  kind           text not null default 'place' check (kind in ('place', 'transport')),
+  -- flight 是交通的一種，但有自己的版面（第一天／最後一天的航班區）與跨日規則
+  kind           text not null default 'place' check (kind in ('place', 'transport', 'flight')),
+  -- 誰搭這班。同行的人可能搭不同班，所以一天可以有好幾筆，各自標人。
+  -- 空陣列＝沒特別指定（全員）。不設 FK：陣列沒辦法設，成員被刪掉時前端就查不到人、自然不顯示。
+  passenger_ids  uuid[] not null default '{}',
   -- 引用不是複製（Q10）。項目被刪時不連鎖刪這一列，見下方 F-47 的觸發器。
   item_id        uuid references public.items on delete set null,
   -- F-47 斷開引用的時間。這個欄位是必要的，不是紀錄用途：
@@ -126,11 +130,15 @@ create table if not exists public.itinerary_entries (
   -- 每一筆自由輸入的項目都會被誤標成「原項目已刪除」。
   detached_at    timestamptz,
   title          text not null default '' check (char_length(title) <= 100),
+  -- 從清單加進來的地點，備註與連結是複製一份而不是引用：
+  -- 當天要改成「今天只買這個」不該回頭改到清單本身（標題與照片仍跟著原項目走）
+  links          jsonb not null default '[]'::jsonb,
   transport_mode text not null default '' check (char_length(transport_mode) <= 30),
   -- D8：純 TIME 不做時區換算。在台灣排、在日本看，用 timestamp 會整份差幾小時。
   start_time     time,
   end_time       time,
-  note           text not null default '' check (char_length(note) <= 500),
+  -- 上限跟 items.note 一樣：清單的備註會整段複製過來，500 會被截斷
+  note           text not null default '' check (char_length(note) <= 2000),
   done           boolean not null default false,
   sort_order     int not null default 0,
   created_by     uuid not null references public.profiles on delete cascade,
@@ -145,11 +153,12 @@ create table if not exists public.itinerary_entries (
   ),
   -- 餐食區沒有交通類型（F-42）
   constraint meal_has_no_transport check (section <> 'meal' or kind = 'place'),
-  -- 交通項目不引用清單地點（F-39）
-  constraint transport_has_no_item check (kind <> 'transport' or item_id is null),
+  -- 交通與航班不引用清單地點（F-39）
+  constraint transport_has_no_item check (kind = 'place' or item_id is null),
   -- 沒有引用就必須自己有標題（F-38）
   constraint title_or_item_required check (item_id is not null or char_length(btrim(title)) > 0),
-  constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time)
+  -- 紅眼航班：23:05 起飛、隔天 05:30 抵達是常態，只有航班放行 end < start
+  constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind = 'flight')
 );
 
 -- TripDay：只在真的寫備註時才會有資料列（PRD §4.1）
@@ -163,6 +172,18 @@ create table if not exists public.trip_days (
 );
 -- 已經建過表的資料庫也要補上這一欄（create table if not exists 不會改既有的表）
 alter table public.itinerary_entries add column if not exists detached_at timestamptz;
+alter table public.itinerary_entries add column if not exists links jsonb not null default '[]'::jsonb;
+-- 備註上限從 500 放寬到 2000，既有資料庫的 CHECK 要換掉
+alter table public.itinerary_entries drop constraint if exists itinerary_entries_note_check;
+alter table public.itinerary_entries add constraint itinerary_entries_note_check check (char_length(note) <= 2000);
+-- 航班（kind = 'flight'）。既有資料庫的三個 CHECK 都要換掉，內容跟上面 create table 裡的一致
+alter table public.itinerary_entries add column if not exists passenger_ids uuid[] not null default '{}';
+alter table public.itinerary_entries drop constraint if exists itinerary_entries_kind_check;
+alter table public.itinerary_entries add constraint itinerary_entries_kind_check check (kind in ('place', 'transport', 'flight'));
+alter table public.itinerary_entries drop constraint if exists transport_has_no_item;
+alter table public.itinerary_entries add constraint transport_has_no_item check (kind = 'place' or item_id is null);
+alter table public.itinerary_entries drop constraint if exists end_after_start;
+alter table public.itinerary_entries add constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind = 'flight');
 
 create index if not exists items_trip_idx        on public.items (trip_id);
 create index if not exists items_owner_idx       on public.items (trip_id, owner_user_id, type);

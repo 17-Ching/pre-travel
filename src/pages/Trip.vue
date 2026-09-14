@@ -2,9 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
-  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank } from '@phosphor-icons/vue'
+  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks } from '@phosphor-icons/vue'
 import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatus, copyItem, deleteItem, toast, now, fmtTime, tagColor, sourceLabel, linkLabel,
-  tripDays, addEntry, scheduledSlots } from '../store'
+  tripDays, addEntry, entryFromItem, scheduledSlots } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
 import ItemCard from '../components/ItemCard.vue'
@@ -16,17 +16,23 @@ const tripId = route.params.tripId
 const t = computed(() => trip(tripId))
 if (!t.value) router.replace('/')
 const p = prefs(tripId) // F-09 / F-24: tab, type and filters remembered locally
-// 舊版使用者的 localStorage 還存著 'shared'，那個分頁在 v2.0 已經不存在
-if (p.tab === 'shared') p.tab = 'itinerary'
-// ?tab=me from the copy toast; same component instance, so watch instead of reading once.
-watch(() => route.query.tab, tab => { if (tab) { p.tab = tab; router.replace({ query: {} }) } }, { immediate: true })
+// 舊的 prefs 只有一個 tab，值可能是 'shared'（v2.0 移除）、'me' 或某個成員 id。
+// 現在分兩層：tab 只有願望清單／行程，「看誰的清單」記在 who。
+if (p.tab !== 'list' && p.tab !== 'itinerary') { p.who = p.tab === 'shared' ? 'me' : p.tab; p.tab = 'list' }
+p.who ??= 'me'
+// ?tab= / ?who= 來自複製與加入行程的 toast；同一個元件實例，所以用 watch 不是讀一次
+watch(() => route.query, q => {
+  if (!q.tab && !q.who) return
+  if (q.tab) p.tab = q.tab
+  if (q.who) p.who = q.who
+  router.replace({ query: {} })
+}, { immediate: true })
 if (!store.offline) store.syncedAt = now()
 
 const others = computed(() => tripMembers(tripId).filter(m => m.userId !== store.me)
   .sort((a, b) => (a.status === 'left') - (b.status === 'left') || a.joinedAt.localeCompare(b.joinedAt)))
-// v2.0：共同分頁移除（Q8），第一個分頁改成全隊共用的行程
 const onItinerary = computed(() => p.tab === 'itinerary')
-const tabOwner = computed(() => (p.tab === 'me' ? store.me : p.tab))
+const tabOwner = computed(() => (p.who === 'me' ? store.me : p.who))
 const editable = computed(() => tabOwner.value === store.me)
 const regions = computed(() => regionsOf(tripId))
 const scoped = computed(() => store.items.filter(i => i.tripId === tripId && i.ownerUserId === tabOwner.value && i.type === p.type))
@@ -65,16 +71,16 @@ function clearFilters() { Object.assign(p, { region: 'all', status: '', tag: '',
 function setType(type) { if (p.type !== type) { p.type = type; p.status = '' } }
 function toggle(key, v) { p[key] = p[key] === v ? '' : v }
 function toggleSearch() { showSearch.value = !showSearch.value; if (!showSearch.value) p.q = '' }
-function add() { store.offline ? toast('需要網路') : router.push({ path: `/trips/${tripId}/items/new`, query: { type: p.type, tab: p.tab, region: p.region } }) }
+function add() { store.offline ? toast('需要網路') : router.push({ path: `/trips/${tripId}/items/new`, query: { type: p.type, region: p.region } }) }
 function pickStatus(s) { setStatus(statusFor.value, { status: s }); statusFor.value = null }
 
 // F-12 複製 / F-17 刪除。離線時只允許切換狀態（F-33），其餘寫入一律擋掉。
-// v2.0：共同分頁沒了，複製目標只剩「我的分頁」，copyItem 也只收一個參數。
+// v2.0：共同分頁沒了，複製目標只剩「我的清單」，copyItem 也只收一個參數。
 function copy() {
   const it = itemMenu.value
   itemMenu.value = null
   copyItem(it)
-  toast('已複製到我的分頁', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: 'me' } } })
+  toast('已複製到我的清單', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: 'list', who: 'me' } } })
 }
 function edit() {
   const it = itemMenu.value
@@ -94,7 +100,7 @@ function addToItinerary() {
 }
 function placeIntoItinerary(section, slot) {
   const { item: it, date } = addFor.value
-  addEntry({ tripId, date, section, slot, kind: 'place', itemId: it.id, title: '', transportMode: '', startTime: null, endTime: null, note: '' })
+  addEntry(entryFromItem(it, { tripId, date, section, slot }))
   addFor.value = null
   toast('已加入行程', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: 'itinerary' } } })
 }
@@ -132,17 +138,26 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       <span v-if="store.pending.length">待同步 {{ store.pending.length }} 筆</span>
     </div>
 
-    <!-- 常駐的「你在哪」：分頁（誰）＋ 子清單（什麼）。進度條是 2px 底線，不另佔一行。 -->
+    <!-- 常駐的「你在哪」：分頁（願望清單／行程）＋ 誰的清單 ＋ 子清單（什麼）。
+         進度條是 2px 底線，不另佔一行。 -->
     <div class="sticky top-14 z-10 bg-surface">
       <nav class="rail flex gap-5">
+        <button :class="tabCls('list')" @click="p.tab = 'list'"><PhListChecks :size="18" />願望清單</button>
         <button :class="tabCls('itinerary')" @click="p.tab = 'itinerary'"><PhCalendarBlank :size="18" />行程</button>
-        <button :class="tabCls('me')" @click="p.tab = 'me'"><Avatar :user="me()" :size="20" />我的</button>
-        <button v-for="m in others" :key="m.userId" :class="[tabCls(m.userId), m.status === 'left' && 'opacity-50']" @click="p.tab = m.userId">
-          <Avatar :user="user(m.userId)" :size="20" />{{ user(m.userId).name }}<span v-if="m.status === 'left'">（已離開）</span>
-        </button>
       </nav>
 
-      <!-- 行程分頁有自己的日期列與版面，下面這整塊是清單分頁專用 -->
+      <!-- 「看誰的清單」收進願望清單裡，只有真的有別人時才出現 -->
+      <div v-if="!onItinerary && others.length" class="rail flex gap-2 pt-2">
+        <button :class="['chip-state', p.who === 'me' && 'on']" @click="p.who = 'me'">
+          <Avatar :user="me()" :size="18" />我的
+        </button>
+        <button v-for="m in others" :key="m.userId" @click="p.who = m.userId"
+          :class="['chip-state', p.who === m.userId && 'on', m.status === 'left' && 'opacity-50']">
+          <Avatar :user="user(m.userId)" :size="18" />{{ user(m.userId).name }}<span v-if="m.status === 'left'">（已離開）</span>
+        </button>
+      </div>
+
+      <!-- 行程分頁有自己的日期列與版面，下面這整塊是願望清單專用 -->
       <div v-if="!onItinerary" class="gutter pb-2 pt-2">
         <div class="relative grid grid-cols-2 rounded-[12px] bg-surface-2 p-1">
           <div class="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
@@ -308,7 +323,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         <PhCalendarBlank :size="20" class="text-muted" /><span class="flex-1">加入行程</span>
       </button>
       <button class="row" :disabled="itemMenu?.ownerUserId === store.me || store.offline" @click="copy">
-        <PhCopy :size="20" class="text-muted" /><span class="flex-1">複製到我的分頁</span>
+        <PhCopy :size="20" class="text-muted" /><span class="flex-1">複製到我的清單</span>
       </button>
       <template v-if="editable">
         <button class="row mt-1 border-t border-line pt-1" :disabled="store.offline" @click="edit">
