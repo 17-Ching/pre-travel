@@ -13,7 +13,7 @@ const tripId = route.params.tripId
 const it = computed(() => getItem(route.params.itemId))
 if (!it.value) router.replace(`/trips/${tripId}`)
 
-const editable = computed(() => it.value.ownerUserId === null || it.value.ownerUserId === store.me)
+const editable = computed(() => it.value.ownerUserId === store.me)
 const images = computed(() => it.value.images ?? [])
 const region = computed(() => store.regions.find(r => r.id === it.value.regionId)?.name)
 const tags = computed(() => it.value.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean))
@@ -27,9 +27,10 @@ const linkify = s => esc(s).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" 
 function remove() {
   if (confirm(`刪除「${it.value.title}」？`)) { deleteItem(it.value.id); router.replace(`/trips/${tripId}`) }
 }
-function copy(target) {
-  copyItem(it.value, target); copying.value = false
-  toast(target === 'shared' ? '已複製到共同分頁' : '已複製到我的分頁', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: target } } })
+// v2.0：共同分頁移除（Q8），複製目標只剩自己的清單分頁
+function copy() {
+  copyItem(it.value); copying.value = false
+  toast('已複製到我的分頁', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: 'me' } } })
 }
 const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買到']]
 </script>
@@ -88,8 +89,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
     </main>
 
     <Sheet v-model:open="copying" title="複製到…">
-      <button class="row" :disabled="it.ownerUserId === store.me" @click="copy('me')">我的分頁</button>
-      <button class="row" :disabled="it.ownerUserId === null" @click="copy('shared')">共同分頁</button>
+      <button class="row" :disabled="it.ownerUserId === store.me" @click="copy">我的分頁</button>
     </Sheet>
   </template>
 </template>

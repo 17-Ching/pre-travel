@@ -62,7 +62,7 @@ watch(() => theme.v, v => {
 }, { immediate: true })
 
 // ---- store 本體
-const empty = () => ({ users: [], trips: [], members: [], regions: [], tags: [], items: [], invites: [] })
+const empty = () => ({ users: [], trips: [], members: [], regions: [], tags: [], items: [], invites: [], entries: [], days: [] })
 export const store = reactive({
   me: null,          // 目前登入者的 id
   ready: false,      // 第一次載入完成前，頁面顯示載入中
@@ -394,17 +394,26 @@ export function deleteItem(id) {
   const i = store.items.findIndex(x => x.id === id)
   if (i < 0) return
   const [removed] = store.items.splice(i, 1)
-  push(() => api.deleteItem(id), () => store.items.splice(i, 0, removed))
+  // F-47：資料庫的觸發器會把引用它的行程項目斷開並留下標題快照。
+  // 這裡做同一件事，畫面才不用等重新整理就正確。
+  const refs = store.entries.filter(e => e.itemId === id)
+  const snapshot = refs.map(e => ({ e, itemId: e.itemId, title: e.title }))
+  refs.forEach(e => { e.itemId = null; e.title = e.title?.trim() || removed.title })
+  push(() => api.deleteItem(id), () => {
+    store.items.splice(i, 0, removed)
+    snapshot.forEach(s => Object.assign(s.e, { itemId: s.itemId, title: s.title }))
+  })
 }
 
-// F-12: copy, remap tags by name to my own tags, reset status.
-export function copyItem(src, target) {
+// F-12：複製他人項目到自己的分頁，標籤依名稱對應到自己的標籤，狀態重設。
+// v2.0 共同分頁移除（Q8），複製目標只剩「我的分頁」，所以不再收 target。
+export function copyItem(src) {
   const tagIds = src.tagIds
     .map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean)
     .map(n => ensureTag(src.tripId, n)?.id).filter(Boolean)
   const clone = JSON.parse(JSON.stringify(src))
   delete clone.id
-  return saveItem({ ...clone, ownerUserId: target === 'shared' ? null : store.me, tagIds, visited: false, status: 'todo' })
+  return saveItem({ ...clone, ownerUserId: store.me, tagIds, visited: false, status: 'todo' })
 }
 
 // F-19 / F-36 / F-33: optimistic status toggle, queued while offline.
@@ -412,20 +421,25 @@ export function setStatus(it, patch) {
   const before = { visited: it.visited, status: it.status }
   Object.assign(it, patch, { updatedAt: now(), updatedBy: store.me })
   if (store.offline) {
-    store.pending = store.pending.filter(p => p.id !== it.id).concat({ id: it.id, ...patch })
+    store.pending = store.pending.filter(p => !(p.kind === 'item' && p.id === it.id))
+      .concat({ kind: 'item', id: it.id, ...patch })
     return
   }
   push(() => api.patchItem(it.id, patch), () => Object.assign(it, before))
 }
 
-// 回到線上：把離線期間累積的狀態切換依序送出
+// 回到線上：把離線期間累積的狀態切換依序送出。
+// 佇列裡兩種東西：清單項目的購買/已去過，以及行程項目的完成。
 watch(() => store.offline, async off => {
   if (off || !store.pending.length) { if (!off) store.syncedAt = now(); return }
   const queue = store.pending.slice()
   store.pending = []
   let failed = 0
   for (const p of queue) {
-    try { await api.patchItem(p.id, p) } catch { failed++ }
+    try {
+      if (p.kind === 'entry') await api.updateEntry(p.id, { done: p.done })
+      else await api.patchItem(p.id, p)
+    } catch { failed++ }
   }
   toast(failed ? `同步完成，${failed} 筆失敗（項目可能已被刪除）` : `已同步 ${queue.length} 筆變更`)
   store.syncedAt = now()
@@ -474,6 +488,201 @@ export function removeMember(tripId, userId) {
   push(() => api.setMemberStatus(tripId, userId, 'left'), () => Object.assign(m, before))
 }
 export const leaveTrip = tripId => removeMember(tripId, store.me)
+
+// ---- 行程（F-37 到 F-47）----
+// 日期一律用 'YYYY-MM-DD' 字串處理。不要用 new Date('2026-11-12')，
+// 那會被當成 UTC 午夜解析，在 UTC+8 算出來就是前一天。D8 說不做時區換算，
+// 這裡的做法就是從頭到尾不讓 Date 碰到日期的語意。
+const WEEK = ['日', '一', '二', '三', '四', '五', '六']
+const parseDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
+const isoOf = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+export const todayISO = () => isoOf(new Date())
+export const addDays = (iso, n) => { const d = parseDate(iso); d.setDate(d.getDate() + n); return isoOf(d) }
+
+// F-37 的日期列 + F-46 的範圍外日子。元件直接拿這個畫，不用自己算日期。
+export function tripDays(tripId) {
+  const t = trip(tripId)
+  if (!t?.start || !t?.end) return []
+  const today = todayISO()
+  const days = []
+  for (let iso = t.start, n = 1; iso <= t.end; iso = addDays(iso, 1), n++) {
+    days.push({ date: iso, dayNo: n, weekday: WEEK[parseDate(iso).getDay()], isToday: iso === today, outOfRange: false })
+  }
+  // F-46：縮短日期不刪資料。落在範圍外又有內容的日子排在最後面，用警示色提示搬走。
+  const inRange = new Set(days.map(d => d.date))
+  const stray = [...new Set([
+    ...store.entries.filter(e => e.tripId === tripId).map(e => e.date),
+    ...store.days.filter(d => d.tripId === tripId && d.note.trim()).map(d => d.date),
+  ])].filter(d => !inRange.has(d)).sort()
+  for (const iso of stray) {
+    days.push({ date: iso, dayNo: null, weekday: WEEK[parseDate(iso).getDay()], isToday: iso === today, outOfRange: true })
+  }
+  return days
+}
+
+// F-40：有時間的排前面依時間，沒時間的排後面依手動排序。
+// 這規則在行程三個時段加餐食五個餐別共八個地方都要用，放在元件裡等於複製八份。
+const byTimeThenOrder = (a, b) => {
+  if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime) || a.order - b.order
+  if (a.startTime) return -1
+  if (b.startTime) return 1
+  return a.order - b.order
+}
+export const entriesOf = (tripId, date, section, slot) => store.entries
+  .filter(e => e.tripId === tripId && e.date === date && e.section === section && e.slot === slot)
+  .sort(byTimeThenOrder)
+
+export function daySummary(tripId, date) {
+  const list = store.entries.filter(e => e.tripId === tripId && e.date === date)
+  return {
+    schedule: list.filter(e => e.section === 'schedule').length,
+    meal: list.filter(e => e.section === 'meal').length,
+    done: list.filter(e => e.done).length,
+  }
+}
+
+export const dayNote = (tripId, date) =>
+  store.days.find(d => d.tripId === tripId && d.date === date)?.note ?? ''
+
+// 引用的是活的資料（Q10）：被引用項目改標題或換照片，行程跟著變。
+// F-47 斷開引用後 title 變成快照，這兩支負責把判斷收在一個地方。
+export const entryTitle = e => (e.itemId ? item(e.itemId)?.title || e.title : e.title)
+export const entryThumb = e => (e.itemId ? item(e.itemId)?.images?.[0]?.url || '' : '')
+export const entryDetached = e => Boolean(!e.itemId && e.title && e.kind !== 'transport')
+
+// F-41 的重複提示與 F-15 的「已排入行程」徽章共用這一支
+export const scheduledSlots = itemId => store.entries
+  .filter(e => e.itemId === itemId)
+  .map(({ date, section, slot }) => ({ date, section, slot }))
+
+const nextOrder = (tripId, date, section, slot) =>
+  entriesOf(tripId, date, section, slot).reduce((m, e) => Math.max(m, e.order + 1), 0)
+
+function buildEntry(d, order) {
+  return reactive({
+    id: uid(),
+    tripId: d.tripId, date: d.date, section: d.section, slot: d.slot,
+    kind: d.kind ?? 'place',
+    itemId: d.itemId ?? null,
+    title: (d.title ?? '').trim(),
+    transportMode: d.transportMode ?? '',
+    startTime: d.startTime ?? '', endTime: d.endTime ?? '',
+    note: d.note ?? '', done: false, order,
+    createdBy: store.me, updatedBy: store.me,
+    createdAt: now(), updatedAt: now(),
+  })
+}
+
+export function addEntry(data) {
+  return addEntries([data])[0]
+}
+
+// F-41 一次加入多筆。傳進來的順序就是 sort_order 的順序。
+// 一次送出，不拆成多次往返，中途失敗才不會留下加了一半的行程。
+export function addEntries(list) {
+  if (!list.length) return []
+  const counters = new Map()
+  const built = list.map(d => {
+    const key = `${d.date}|${d.section}|${d.slot}`
+    const base = counters.get(key) ?? nextOrder(d.tripId, d.date, d.section, d.slot)
+    counters.set(key, base + 1)
+    return buildEntry(d, base)
+  })
+  store.entries.push(...built)
+  touch(list[0].tripId)
+  push(() => api.createEntries(built, store.me), () => {
+    for (const e of built) {
+      const i = store.entries.indexOf(e)
+      if (i >= 0) store.entries.splice(i, 1)
+    }
+  })
+  return built
+}
+
+export function updateEntry(entry, patch) {
+  const before = { ...entry }
+  Object.assign(entry, patch, { updatedAt: now(), updatedBy: store.me })
+  push(() => api.updateEntry(entry.id, patch), () => Object.assign(entry, before))
+}
+
+// D1：勾完成時，若引用的是自己的地點就同步 visited。
+// 真正的寫入由資料庫觸發器做（換裝置、別人操作時也要成立），
+// 這裡只是把同一件事反映在本地，畫面才不用等重新整理。
+export function toggleEntryDone(entry) {
+  const done = !entry.done
+  const before = entry.done
+  entry.done = done
+  entry.updatedAt = now()
+  entry.updatedBy = store.me
+
+  const ref = entry.itemId ? item(entry.itemId) : null
+  const mirrors = Boolean(ref && ref.ownerUserId === store.me && ref.type === 'place')
+  const visitedBefore = ref?.visited
+  if (mirrors) ref.visited = done
+
+  if (store.offline) {
+    store.pending = store.pending.filter(p => !(p.kind === 'entry' && p.id === entry.id))
+      .concat({ kind: 'entry', id: entry.id, done })
+    return
+  }
+  push(() => api.updateEntry(entry.id, { done }), () => {
+    entry.done = before
+    if (mirrors) ref.visited = visitedBefore
+  })
+}
+
+export function reorderEntries(tripId, date, section, slot, orderedIds) {
+  const before = new Map()
+  const pairs = []
+  orderedIds.forEach((id, i) => {
+    const e = store.entries.find(x => x.id === id)
+    if (!e) return
+    before.set(e, e.order)
+    e.order = i
+    pairs.push([id, i])
+  })
+  push(() => api.setEntryOrder(pairs), () => before.forEach((v, e) => { e.order = v }))
+}
+
+// 跨日拖曳 v1 不做，改走卡片選單的「搬到其他天」，都是同一支
+export function moveEntry(entry, target) {
+  const before = { date: entry.date, section: entry.section, slot: entry.slot, order: entry.order }
+  const order = nextOrder(entry.tripId, target.date, target.section, target.slot)
+  Object.assign(entry, target, { order, updatedAt: now(), updatedBy: store.me })
+  push(() => api.updateEntry(entry.id, { ...target, order }), () => Object.assign(entry, before))
+}
+
+export function deleteEntry(id) {
+  const i = store.entries.findIndex(e => e.id === id)
+  if (i < 0) return
+  const [removed] = store.entries.splice(i, 1)
+  push(() => api.deleteEntry(id), () => store.entries.splice(i, 0, removed))
+}
+
+// F-43：空備註不留資料列，清空等於刪掉那一筆
+export function setDayNote(tripId, date, note) {
+  note = (note ?? '').slice(0, 500)
+  const existing = store.days.find(d => d.tripId === tripId && d.date === date)
+  const before = existing ? { ...existing } : null
+
+  if (!note.trim()) {
+    if (!existing) return
+    store.days.splice(store.days.indexOf(existing), 1)
+    push(() => api.deleteDayNote(tripId, date), () => store.days.push(reactive(before)))
+    return
+  }
+  if (existing) {
+    Object.assign(existing, { note, updatedBy: store.me, updatedAt: now() })
+    push(() => api.saveDayNote(tripId, date, note, store.me), () => Object.assign(existing, before))
+    return
+  }
+  const created = reactive({ tripId, date, note, updatedBy: store.me, updatedAt: now() })
+  store.days.push(created)
+  push(() => api.saveDayNote(tripId, date, note, store.me), () => {
+    const i = store.days.indexOf(created)
+    if (i >= 0) store.days.splice(i, 1)
+  })
+}
 
 // ---- F-14 / F-28 連結預覽。真的抓網頁的邏輯在 api/preview.js（Vercel function）。
 export async function fetchPreview(url) {

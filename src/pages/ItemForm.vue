@@ -12,7 +12,8 @@ const existing = route.params.itemId ? getItem(route.params.itemId) : null
 const type = existing?.type ?? (route.query.type === 'shopping' ? 'shopping' : 'place')
 const qRegion = route.query.region
 const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
-  tripId, type, ownerUserId: route.query.tab === 'shared' ? null : store.me,
+  // v2.0：共同分頁移除（Q8），項目一定進自己的清單分頁
+  tripId, type, ownerUserId: store.me,
   title: '', links: [newLink()], regionId: qRegion && qRegion !== 'all' && qRegion !== 'none' ? qRegion : null,
   images: [], note: '', visited: false, status: 'todo', plannedStore: '', tagIds: [],
 })

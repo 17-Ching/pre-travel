@@ -18,7 +18,11 @@ const matches = computed(() => {
   const s = q.value.trim().toLowerCase()
   return s ? COUNTRIES.filter(c => c.name.includes(s) || c.code.toLowerCase().includes(s)).slice(0, 6) : []
 })
-const canSave = computed(() => form.value.name.trim() && form.value.country)
+// v2.0：日期改為必填（Q9）。行程頁的「有哪幾天」是從起訖日算出來的，
+// 少了它連日期列都畫不出來，所以這裡擋在前面，不要等資料庫回 dates_required。
+const canSave = computed(() =>
+  form.value.name.trim() && form.value.country && form.value.start && form.value.end
+  && form.value.end >= form.value.start)
 const itemCount = computed(() => store.items.filter(i => i.tripId === t?.id).length)
 
 function pickCover(e) {
@@ -82,8 +86,12 @@ const links = [['members', '成員與邀請'], ['regions', '地區'], ['tags', '
 
     <!-- 上下排：手機的 date 輸入框並排一定會擠（內在最小寬度很大） -->
     <div class="grid gap-3">
-      <div><label class="label" for="start">出發日</label><input id="start" v-model="form.start" type="date" class="input" /></div>
-      <div><label class="label" for="end">回程日</label><input id="end" v-model="form.end" type="date" :min="form.start" class="input" /></div>
+      <div><label class="label" for="start">出發日</label><input id="start" v-model="form.start" type="date" class="input" required /></div>
+      <div>
+        <label class="label" for="end">回程日</label>
+        <input id="end" v-model="form.end" type="date" :min="form.start" class="input" required />
+        <p class="mt-1.5 text-[12px] text-muted">行程頁的每一天是從這段日期算出來的，所以不能留空。</p>
+      </div>
     </div>
 
     <div>
