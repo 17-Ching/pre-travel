@@ -4,11 +4,11 @@
 |---|---|
 | 對象 | 之後要維護或接手這個專案的人 |
 | 後端 | Supabase（Postgres + RLS + Auth + Storage），已接上 |
-| 搭配文件 | [PRD.md](PRD.md)（原始需求）。本文件記錄**實作最後長什麼樣**，與 PRD 不一致處以本文件為準 |
+| 搭配文件 | [PRD.md](PRD.md) v2.0（原始需求）。本文件記錄**實作最後長什麼樣**，與 PRD 不一致處以本文件為準 |
 | 日期 | 2026-09-14 |
 
-> 這份文件在 2026-09-11 原本是「給之後接 API 的人」的待辦清單。
-> 資料層已經接完（commit `ee67788`），所以整份改寫成現況說明。
+> 沿革：2026-09-11 原本是「給之後接 API 的人」的待辦清單，資料層接完後改寫成
+> 現況說明。2026-09-14 PRD 出 v2.0（行程頁、共同分頁移除），本文件同步更新。
 
 ---
 
@@ -18,7 +18,8 @@
 - 資料在 Supabase，權限由 Postgres 的 RLS 決定，前端沒有任何後端 API 要維護。
 - 唯一自寫的伺服器端程式是 [`api/preview.js`](api/preview.js)，跑在 Vercel Functions，負責連結預覽與圖片轉存。
 - 登入是**帳號密碼**，不收 email。
-- 尚未完成的只有離線與 PWA（PRD F-31 到 F-34）。
+- 一個專案有兩種東西：**清單**（每人一個分頁，他人的唯讀）與**行程**（全隊共用一份，按日期排）。v2.0 起沒有共同分頁。
+- 尚未完成的只有離線與 PWA（PRD F-31 到 F-34、F-45）。
 
 ---
 
@@ -29,8 +30,8 @@
 | 檔案 | 行數 | 職責 | 不該出現的東西 |
 |---|---|---|---|
 | [`src/supabase.js`](src/supabase.js) | 83 | 建立 client、帳號密碼登入註冊、簽名網址 | 任何業務邏輯 |
-| [`src/api.js`](src/api.js) | 233 | 所有 Supabase 查詢與寫入、snake_case 轉 camelCase | Vue 的東西、畫面狀態 |
-| [`src/store.js`](src/store.js) | 451 | 畫面的資料來源、樂觀更新、回捲、toast | 直接呼叫 Supabase |
+| [`src/api.js`](src/api.js) | 313 | 所有 Supabase 查詢與寫入、snake_case 轉 camelCase | Vue 的東西、畫面狀態 |
+| [`src/store.js`](src/store.js) | 649 | 畫面的資料來源、樂觀更新、回捲、toast | 直接呼叫 Supabase |
 
 **資料庫是 snake_case，畫面用 camelCase，轉換全部關在 `api.js` 裡。** 其他檔案看不到 `owner_user_id` 這種名字。
 
@@ -89,14 +90,17 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 | 只能貼自己的標籤（§4.2） | `item_tags_insert` 同時檢查項目可寫與標籤屬於自己 | 同上 |
 | 撤銷邀請：owner 全部，成員限自己產生的 | `invites_update` | 同上 |
 | 擁有者不能自行離開 | `owner_cannot_leave` CHECK 約束，不是 policy | 同上 |
+| **行程**：任何 active 成員都能增刪改 | `itinerary_*` 四條、`trip_days_all` | 同上 |
 
-共 26 條 policy 與 4 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite`）。
+共 31 條 policy、4 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite`）、6 個觸發器。
+
+行程刻意**沒有** `owner_user_id`，不設個人隔離。PRD §3.2 的理由：行程的價值在於大家看同一份，個人的想法放在自己的清單分頁。
 
 **輔助函式一律 `security definer`**，因為 policy 互相引用會無限遞迴。改 policy 前先理解這點。
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 35 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤只有自己看得到、非成員完全看不到、刪地區不連帶刪項目等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 54 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤只有自己看得到、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -125,6 +129,15 @@ PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_sel
 **假網域鎖死了**
 帳號密碼登入把帳號接上 `@pretravel.app` 湊出 Supabase Auth 需要的 email 格式。Supabase 會拒絕 `.local` 之類的非真實 TLD。**這個值一旦有人註冊就不能再改**，改了等於所有既有帳號都登不進去。
 
+**自由輸入的行程項目與被斷開引用的行程項目，資料形狀一模一樣**
+兩種都是 `item_id` 為 null、`title` 有值，前端分不出來。靠 `detached_at` 區分，由 F-47 的觸發器在斷開時寫入。不要改回用「沒有 itemId 又有 title」判斷，那會把每一筆使用者自己打的項目都標成「原項目已刪除」。
+
+**D1 的「影響 0 筆」是預期結果，不是失敗**
+勾完成時只同步自己的地點的 `visited`，引用他人的就是 0 筆。這跟本專案其他地方「0 筆等於被 RLS 拒絕」的判讀相反，不要在那裡加 `must()`。
+
+**日期不要用 `new Date()` 解析**
+`new Date('2026-11-12')` 會被當成 UTC 午夜，在 UTC+8 算出來是前一天。日期一律用 `'YYYY-MM-DD'` 字串比較與加減，時間一律用 `'HH:MM'` 字串。這是 PRD D8 說的「不做時區換算」在程式碼裡的具體做法。
+
 **Supabase 的 Confirm email 必須維持關閉**
 信箱是假的，確認信永遠收不到。開著的話新帳號會卡在未確認而登不進去。
 
@@ -139,8 +152,12 @@ PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_sel
 | §4.1 `Item.url_image_key` 縮圖欄位 | **已移除**。連結預覽圖會轉存成第一張 `images` | 少一個欄位，卡片縮圖直接取 `images[0]` |
 | §4.1 `ItemImage` 獨立資料表 | `items.images` jsonb 陣列，存 `{ path, w, h }` | App 從不單獨查圖片，拆表只是多一次 join |
 | §4.1 `User.email` | 沒有這個欄位 | 帳號密碼登入拿不到也不需要 email |
-| F-25 共同分頁標籤依名稱合併 | **沒做**。`tags_all` policy 只讓你看到自己的標籤 | 要做的話得放寬標籤的讀取權限，是 P1 需求，先不動 |
+| §4.1 `ItineraryEntry` 欄位表 | 多一個 `detached_at` | 沒有它就分不出「自己打的」和「被斷開的」，見第 4 節 |
 | F-27 圖片壓縮 1600 px | 已對齊（`MAX.item = 1600`） | 原型受 localStorage 限制才壓到 800 |
+| F-44 跨日拖曳 | 改成卡片選單「搬到其他天」 | 使用者決定，v1 不做拖曳 |
+| F-40 有時間的項目可拖曳排序 | 不給拖曳握把，改顯示「有時間的項目會依時間自動排序」 | PRD 原設計是「存了排序但畫面不動只跳提示」，那會被當成壞掉 |
+
+v2.0 已隨共同分頁一起消失的東西：F-25 標籤同名合併、§4.2 的標籤合併規則。
 
 ---
 
@@ -172,8 +189,9 @@ node scripts/check.mjs
 |---|---|
 | F-31 PWA Service Worker | **未做**。manifest 在 [`public/manifest.webmanifest`](public/manifest.webmanifest)，SW 完全沒寫 |
 | F-32 離線可讀 | **未做**。沒有 IndexedDB 也沒有 Cache Storage |
-| F-33 離線可寫 | **半套**。`store.offline` 還是 Trip 頁選單裡的手動開關，`store.pending` 只存在記憶體，重整就消失。真實版要改用 `navigator.onLine` 加上 `online`/`offline` 事件，佇列落地 IndexedDB |
-| F-34 衝突處理 | 未做。目前是誰後寫誰贏，但沒有比對 `updated_at` |
+| F-33 離線可寫 | **半套**。`store.offline` 還是 Trip 頁選單裡的手動開關，`store.pending` 只存在記憶體，重整就消失。真實版要改用 `navigator.onLine` 加上 `online`/`offline` 事件，佇列落地 IndexedDB。佇列已經能裝兩種東西（清單項目的狀態、行程項目的完成），用 `kind` 區分 |
+| F-45 行程離線 | **未做**，依賴上面三條，照使用者決定整批往後 |
+| F-34 衝突處理 | 未做。目前誰後寫誰贏，但沒有比對 `updated_at` |
 | 刪除項目時清掉 bucket 檔案 | **未做**。刪項目只刪資料列，圖片會變成孤兒檔。注意 F-12 複製項目時圖片是共用同一個 path，所以要刪檔前得確認沒有其他項目還在引用 |
 
 ### 7.1 已經端對端實測過的
@@ -185,6 +203,8 @@ node scripts/check.mjs
 - **圖片上傳**：資料庫存的是 path 不是網址；重整後 path 不變、簽名 token 換新；實際 fetch 回 200 `image/jpeg`；有效期 3600 秒；**非上傳者的其他成員也讀得到**（`media` 私有 bucket 的 RLS 正確）
 - **邀請流程**：未登入開 `/invite/<token>` 會導到登入頁且 token 完整保留，登入後回到邀請頁，`invite_preview` RPC 對非成員有效，加入後看得到擁有者的項目
 - **權限矩陣在真實環境的行為**：改他人分頁靜默 0 筆、插入他人分頁 42501、偽造 `created_by` 42501、成員改專案名稱 0 筆、擁有者自行離開 23514、成員離開後項目仍保留（PRD §3.3）
+- **v1 → v2.0 遷移**：先在 v1 形狀的本機資料庫驗過（共同分頁項目被刪、個人項目一筆沒動、標籤關聯連帶清掉、缺日期的專案用建立日補值），再跑正式環境，八項驗收全過
+- **行程**：三種新增方式、`addEntries` 多筆順序、F-40 排序、D1 連動的兩種情況、F-47 刪地點後兩筆引用都存活且標題快照正確、`setDayNote`、`moveEntry` 跨日跨時段、F-46 縮短日期後範圍外那天排到最後且資料一筆沒少。寫入後都呼叫 `refresh()` 從伺服器重讀比對，不是只看本地樂觀更新的結果
 
 ---
 
@@ -210,8 +230,9 @@ Supabase 那邊的設定：Confirm email 關閉；`media` bucket 私有、`avata
 ```
 api/preview.js        連結預覽 / 圖片轉存（Vercel Function，唯一的伺服器端程式）
 supabase/
-  schema.sql          資料表、RLS、RPC、Storage。可重複執行
-  rls-test.sql        權限驗證，35 項。跑在用完就丟的本機 Postgres
+  schema.sql          資料表、RLS、RPC、觸發器、Storage。可重複執行
+  migrate-v2.sql      v1 → v2.0 的一次性遷移。會刪資料，跟 schema.sql 刻意分開
+  rls-test.sql        權限驗證，54 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址
@@ -225,7 +246,7 @@ src/
     Trips.vue       P-02   旅程列表
     Profile.vue     P-11   個人資料（PRD 沒有，後加的）
     TripForm.vue    P-03   建立 / 編輯專案，封面上傳
-    Trip.vue        P-04   分頁列 / 子清單 / 篩選 / 清單
+    Trip.vue        P-04   分頁列（行程 / 我的 / 成員）/ 子清單 / 篩選 / 清單
     ItemForm.vue    P-05   新增 / 編輯項目，連結預覽與圖片上傳
     ItemDetail.vue  P-06
     Members.vue     P-07   成員與邀請
@@ -233,6 +254,8 @@ src/
     Tags.vue        P-09
     Invite.vue      P-10   接受邀請，走 invite_preview RPC
   components/
+    Itinerary.vue   行程分頁的完整版面：日期列、三時段、五餐別、每日備註
+    EntryCard.vue   行程卡片：一般與交通兩種樣式、時間徽章、完成勾選
     TopBar / Sheet / ItemCard / TagChip / Avatar / ThemeToggle
 ```
 
