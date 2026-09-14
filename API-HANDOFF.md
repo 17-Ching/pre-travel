@@ -1,348 +1,232 @@
-# 接 API 交接文件
+# 架構與交接說明
 
 | 項目 | 內容 |
 |---|---|
-| 對象 | 之後負責把前端接上真實後端的工程師 |
-| 前端現況 | UI 全部完成，資料層是 **localStorage mock**，沒有任何網路請求 |
-| 搭配文件 | [PRD.md](PRD.md)（需求與資料模型，以它為準） |
-| 日期 | 2026-09-11 |
+| 對象 | 之後要維護或接手這個專案的人 |
+| 後端 | Supabase（Postgres + RLS + Auth + Storage），已接上 |
+| 搭配文件 | [PRD.md](PRD.md)（原始需求）。本文件記錄**實作最後長什麼樣**，與 PRD 不一致處以本文件為準 |
+| 日期 | 2026-09-14 |
+
+> 這份文件在 2026-09-11 原本是「給之後接 API 的人」的待辦清單。
+> 資料層已經接完（commit `ee67788`），所以整份改寫成現況說明。
 
 ---
 
-## 0. 先讀這段
+## 0. 三十秒版本
 
-前端已經照 PRD 全部做完，但**所有資料都是假的**。整個 mock 層集中在一個檔案：[`src/store.js`](src/store.js)。
-
-**最重要的一句話：接 API 時原則上只需要改 `store.js`，不要動任何 `.vue`。**
-
-所有頁面都只透過 `store.js` 匯出的函式讀寫資料，沒有一個元件自己發請求、自己組 URL。只要你把那些函式換成呼叫後端、並維持相同的**函式簽章與回傳形狀**，UI 就會直接動起來。
-
-有三個地方是例外（`.vue` 裡藏了假邏輯），下面 §3 會逐一點名。
+- 前端是 Vue 3 + Vite，部署在 Vercel。
+- 資料在 Supabase，權限由 Postgres 的 RLS 決定，前端沒有任何後端 API 要維護。
+- 唯一自寫的伺服器端程式是 [`api/preview.js`](api/preview.js)，跑在 Vercel Functions，負責連結預覽與圖片轉存。
+- 登入是**帳號密碼**，不收 email。
+- 尚未完成的只有離線與 PWA（PRD F-31 到 F-34）。
 
 ---
 
-## 1. 現在的資料層長怎樣
+## 1. 檔案分工
 
-```js
-// src/store.js:146-148
-const saved = JSON.parse(localStorage.getItem('pretravel') || 'null')
-export const store = reactive(saved?.v === SEED_VERSION ? { ...saved, ... } : seed())
-watch(store, s => localStorage.setItem('pretravel', JSON.stringify(s)), { deep: true })
-```
+三個檔案各有明確邊界，不要混用：
 
-- 一個 Vue `reactive` 物件裝下**整個資料庫**：`users / trips / members / regions / tags / items / invites`
-- 任何寫入都是直接改這個物件，deep watch 再整包 `JSON.stringify` 存進 localStorage
-- 欄位名稱刻意對齊 PRD §4.1，只是用 camelCase（`ownerUserId`、`plannedStore`、`createdAt`…）
-
-**這代表兩件事：**
-
-1. 所有「寫入」目前都是**同步且必定成功**的。接 API 後它們會變成 async 且可能失敗 —— 這是最大的改動點，見 §5。
-2. 目前沒有任何權限檢查。前端只是「不顯示按鈕」，任何人改一下 localStorage 就能寫別人的分頁。PRD §7 明寫**前端隱藏按鈕不算授權**，授權一定要在後端做，見 §7。
-
----
-
-## 2. 建議的技術路線
-
-PRD §8 建議用 BaaS（Supabase / Firebase），理由是權限模型可以直接用 Row-Level Security 表達，不用自己寫後端。這份文件以 **Supabase** 為例，但換成自寫 REST API 也適用，對照表照樣有效。
-
-需要自己寫的伺服器端邏輯**只有一支**：連結預覽 / 圖片轉存（見 §6）。
-
----
-
-## 3. 三個「假的」資料：頭像、圖片、名稱
-
-這是這份文件的重點，也是最容易接錯的地方。
-
-### 3.1 使用者頭像
-
-**現況**
-
-| 情境 | 現在的值 | 檔案 |
-|---|---|---|
-| 示範帳號的預設頭像 | `https://i.pravatar.cc/96?u=jean` 外部假圖 | [`store.js:58`](src/store.js#L58) |
-| 使用者自己換的頭像 | **base64 data URL**，直接塞在 `user.avatar` 字串裡 | [`Profile.vue:23`](src/pages/Profile.vue#L23) |
-
-換頭像的流程現在是這樣：
-
-```js
-// src/store.js:191 — 三種用途一組尺寸，前端 canvas 壓縮
-export const MAX = { avatar: 256, cover: 1024, item: 800 }
-export function shrinkImage(file, max = MAX.item) { ... }  // 回傳 { url, w, h }
-```
-
-**為什麼當初這樣做**：`URL.createObjectURL()` 產生的 `blob:` 網址**重整就失效**，而頭像出現在每一頁，一破圖非常明顯。data URL 可以跟著 localStorage 一起存活。實測一張 600×400 的圖壓完是 3.2 KB。
-
-**接 API 要換成什麼**
-
-1. `User.avatar_url` 存的應該是**儲存空間的 URL 或 key**，不是 base64。
-2. 上傳流程改成：選檔 → 前端壓縮（**`shrinkImage` 的 canvas 邏輯可以留著重用**，只是改成輸出 `Blob` 而不是 data URL，用 `canvas.toBlob()`）→ 上傳到 bucket → 拿到 URL → `PATCH /me`。
-3. 上傳應該在**按下「儲存」時**才做，不是選檔當下就做。現在的 UI 是選檔立刻顯示預覽（本機的），這個體驗要保留 —— 選檔時用 `URL.createObjectURL()` 做預覽即可（暫時的、不落地，所以 blob 失效沒關係），真正上傳在 `save()` 裡。
-4. 上傳失敗要有可見提示並可重試（PRD §7 錯誤處理：**不可靜默丟失**）。
-
-> ⚠️ 注意 Google 登入回傳的 `picture` URL 會過期，而且是外部網域。PRD §7 要求圖片放**私有 bucket**。建議首次登入時把 Google 頭像下載轉存一份，之後都用自己的副本。
-
-### 3.2 項目圖片與旅程封面
-
-**現況**
-
-| 位置 | 現在的做法 | 狀態 |
-|---|---|---|
-| 項目圖片 [`ItemForm.vue`](src/pages/ItemForm.vue) `addFiles()` | `shrinkImage(file, MAX.item)` → 800 px data URL | 會存活，但是 base64 |
-| 旅程封面 [`TripForm.vue`](src/pages/TripForm.vue) `pickCover()` | `shrinkImage(file, MAX.cover)` → 1024 px data URL | 同上 |
-| 貼圖片網址 [`ItemForm.vue`](src/pages/ItemForm.vue) `addImageUrl()` | **直接存外部 URL，沒有轉存** | ⚠️ 還是假的 |
-| seed 資料 | `https://picsum.photos/seed/...` | 假圖 |
-
-尺寸比 PRD F-27 的 1600 px 保守，是因為原型把圖片塞進 localStorage（~5 MB 上限）。接 API 後圖片在 bucket，**應該調回 1600 px**。
-
-「貼圖片網址」是 §0 說的「`.vue` 裡藏了假邏輯」的例外之一，**必須改**。它不能在前端做：瀏覽器抓跨網域圖片會污染 canvas，`toDataURL()` 直接 throw。這正是 PRD F-28 要求後端下載轉存的原因。
-
-**接 API 要做的**
-
-1. `ItemImage` / `Trip.cover_image_key` 存 bucket 的 key，不存 base64、不存外部 URL。
-2. 尺寸調回 F-27 的 1600 px（改 `MAX.item` 即可），輸出改 `canvas.toBlob()` 上傳，canvas 邏輯不用動。
-3. 上傳要有進度與取消、失敗可重試（F-27）。現在只有一個 `busy` 旗標擋住重複選檔。
-4. 「貼圖片網址」(F-28) 必須走**後端**下載轉存，不能前端直連 —— 原因是 IG / Google 的圖片網址會過期，而且離線需要自己的副本。同一支 serverless function，見 §6。
-5. 私有 bucket + 短效簽名網址，或不可猜的 key + 成員驗證（PRD §7）。
-6. 刪除 Item 時要**連同 bucket 檔案一起刪**（PRD §4.2）。注意 F-12 複製項目時圖片是「引用同一份檔案，不重複上傳」，所以刪檔前要確認沒有其他 Item 還在引用。
-
-### 3.2.1 ⚠️ 資料模型已偏離 PRD：一個項目多個連結
-
-PRD §4.1 的 `Item` 只有單一 `url` / `url_title` / `url_image_key`。**前端已改成多連結**：
-
-```js
-Item.links = [{ id, url, title }]   // title 是使用者自己命名的，最多 5 個
-Item.urlImage                        // 保留：卡片縮圖，由第一個抓到預覽的連結提供
-// Item.url 與 Item.urlTitle 已移除
-```
-
-對應的後端要改成**一對多**（建議 `ItemLink` 資料表：`id / item_id / url / title / sort_order`），
-並在 `Item` 上保留一個縮圖欄位。`url` 長度上限沿用 PRD 的 2048，`title` 前端限 40 字。
-
-舊資料的升級邏輯在 [`store.js`](src/store.js) 的 `store.items.forEach` 那段（單一 `url` → 一筆 `links`），
-可以直接翻成後端的 migration。
-
-### 3.3 顯示名稱
-
-**現況**
-
-```js
-// src/store.js:200
-export function updateProfile({ name, avatar }) {
-  const u = me()
-  name = name.trim().slice(0, 30)
-  if (!name) return false
-  Object.assign(u, { name, avatar })   // 直接改記憶體裡的物件
-  return true
-}
-```
-
-因為 store 是 reactive 的，改完會自動同步到：分頁列的「我的」、共同分頁的「由誰新增」、成員列表、旅程卡的頭像堆。**接 API 後這個特性要保留** —— 也就是 API 成功回來後，要把新資料寫回 `store.users` 裡對應的那筆，不要只發請求不更新本地狀態，否則畫面不會動。
-
-**要注意的**
-
-- PRD §4.1 `User.display_name` 註明「來自 Google，使用者可改」，所以改名是需求內的，不用另外確認。
-- 長度上限 30 字是前端自己定的（PRD 沒寫），後端要對齊或明確給一個值。
-- **`User.email` 目前前端完全沒有這個欄位**，但 PRD §4.1 有。接 Google OAuth 時要補進 `store.users` 的資料形狀，個人資料頁也該顯示（唯讀）。
-
----
-
-## 4. store.js 函式 → API 對照表
-
-以下每一個都要換成真實請求。**簽章不要改**，不然要連 `.vue` 一起動。
-
-### 讀取（目前都是同步 filter/find，接 API 後多半改成載入時抓一次 + 快取）
-
-| 函式 | 行 | 對應 |
-|---|---|---|
-| `me()` / `user(id)` | 152-153 | `GET /me`、users 快取 |
-| `trip(id)` / `myTrips()` | 154, 157 | `GET /trips`（F-02，`updated_at` 新到舊） |
-| `tripMembers(tripId)` | 155 | `GET /trips/:id/members` |
-| `isOwner(tripId)` | 156 | 由 members 推導即可 |
-| `regionsOf(tripId)` | 160 | `GET /trips/:id/regions`（依 `sort_order`） |
-| `myTags(tripId)` | 162 | `GET /trips/:id/tags?mine=1` |
-| `item(id)` | 164 | items 快取 |
-
-> 建議做法：進專案頁時一次抓齊該 trip 的 regions / tags / items / members 灌進 store（F-35 要求「每次進入專案頁自動拉最新資料」），其餘讀取函式維持現在的同步查本地快取，這樣 `.vue` 完全不用改。
-
-### 寫入（重點）
-
-| 函式 | 行 | 對應 API | 備註 |
+| 檔案 | 行數 | 職責 | 不該出現的東西 |
 |---|---|---|---|
-| `login(userId)` | 177 | Google OAuth 2.0 / OIDC | 現在是「選一個示範帳號」，整段要重寫。F-01：登入狀態保留 ≥ 30 天 |
-| `logout()` | 178 | 清 session | |
-| `updateProfile({name, avatar})` | 200 | `PATCH /me` | 見 §3.1 / §3.3 |
-| `createTrip(...)` | 209 | `POST /trips` | 建立者自動成為 owner + 產生個人分頁 |
-| `updateTrip(id, ...)` | 215 | `PATCH /trips/:id` | **僅 owner** |
-| `deleteTrip(id)` | 218 | `DELETE /trips/:id` | 軟刪除（`deleted_at`），保留 30 天後排程清除 |
-| `addRegion / renameRegion / moveRegion / deleteRegion` | 221-244 | `/trips/:id/regions` CRUD | 刪除時把該地區項目的 `region_id` 設 null，**不刪項目** |
-| `ensureTag / renameTag / deleteTag` | 246-267 | `/trips/:id/tags` CRUD | 標籤屬於 **user × trip**，每人每專案上限 50 |
-| `saveItem(data)` | 269 | `POST` / `PATCH /items` | |
-| `deleteItem(id)` | 275 | `DELETE /items/:id` | 連同 ItemImage 與 bucket 檔案 |
-| `copyItem(src, target)` | 277 | `POST /items/copy` | F-12：標籤**依名稱**對應到自己的標籤，不存在則建立；購買狀態與 visited 重設；圖片引用同一份檔案 |
-| `setStatus(it, patch)` | 282 | `PATCH /items/:id` | **樂觀更新 + 離線佇列**，見 §8 |
-| `createInvite / revokeInvite / acceptInvite` | 293-305 | `/invites` | token ≥ 32 bytes 隨機不可猜，7 天有效 |
-| `removeMember / leaveTrip` | 307, 310 | `/trips/:id/members/:uid` | 見 PRD §3.3，分頁保留變唯讀 |
-| `fetchPreview(url)` | 319 | serverless function | 見 §6，**目前整支是假的** |
+| [`src/supabase.js`](src/supabase.js) | 83 | 建立 client、帳號密碼登入註冊、簽名網址 | 任何業務邏輯 |
+| [`src/api.js`](src/api.js) | 233 | 所有 Supabase 查詢與寫入、snake_case 轉 camelCase | Vue 的東西、畫面狀態 |
+| [`src/store.js`](src/store.js) | 451 | 畫面的資料來源、樂觀更新、回捲、toast | 直接呼叫 Supabase |
 
-### 可以直接刪掉的
+**資料庫是 snake_case，畫面用 camelCase，轉換全部關在 `api.js` 裡。** 其他檔案看不到 `owner_user_id` 這種名字。
 
-| 函式 | 行 | 說明 |
-|---|---|---|
-| `resetDemo()` | 149 | 原型用，重設示範資料 |
-| `seed()` | 60 | 整包假資料 |
-| `store.offline` 開關 | Trip.vue 選單 | 原型用來模擬離線，真實版改用 `navigator.onLine` + `online`/`offline` 事件 |
+`src/auth-rules.js`（13 行）是帳號密碼的驗證規則，刻意不 import Supabase SDK，任何地方都能安全 import。`supabase.js` 從它 re-export，規則只有一份定義。
 
 ---
 
-## 5. 從同步變非同步：唯一會逼你動 .vue 的地方
+## 2. store 是本地鏡像，不是快取層
 
-現在所有寫入都是同步的：
-
-```js
-function save() { saveItem(f.value); router.replace(`/trips/${tripId}`) }
+```
+登入 → api.loadAll() 一次撈回使用者看得到的全部資料 → 灌進 reactive store
+頁面讀資料：同步，直接讀 store（myTrips()、regionsOf()、item(id)…）
+頁面寫資料：呼叫 store 的函式，它先改本地，再背景送出
 ```
 
-接 API 後會變成：
+**讀取維持同步是刻意的**，因為這樣所有 `.vue` 讀資料的寫法都不用改。RLS 已經把範圍限制在使用者參與的專案，朋友等級的資料量一次撈完最省事，也直接鋪好了離線快取的路。
+
+### 2.1 樂觀寫入
 
 ```js
-async function save() {
-  saving.value = true
-  try { await saveItem(f.value); router.replace(...) }
-  catch (e) { toast('儲存失敗，請重試') }   // PRD §7：不可靜默丟失
-  finally { saving.value = false }
+export function addRegion(tripId, name) {
+  const r = reactive({ id: uid(), tripId, name, order: ... })
+  store.regions.push(r)                       // 本地先改，畫面立刻反應
+  push(() => api.addRegion(...), () => {      // 背景送出，失敗回捲
+    store.regions.splice(store.regions.indexOf(r), 1)
+  })
+  return r                                     // 同步回傳，呼叫端不用 await
 }
 ```
 
-**建議策略**：讓 store 的寫入函式維持「樂觀更新本地 + 背景送出 + 失敗時回滾並 toast」，這樣絕大多數呼叫端不用改，只有需要顯示 loading 的表單（ItemForm、TripForm、Profile）要加 `await` 和 disabled 狀態。
+id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一筆。
 
-`toast()`（[`store.js:170`](src/store.js#L170)）已經寫好了，錯誤提示直接用它。
+**只有四支是 async**，因為呼叫端真的需要等結果：`createTrip`（id 由 RPC 產生）、`updateTrip`、`updateProfile`、`acceptInvite`。其餘全部同步。
+
+### 2.2 寫入必須排成一條序列
+
+`store.js` 的 `push()` 把所有寫入排進同一條 promise 鏈，**這不是為了節流**：
+
+使用者在項目表單裡順手新增地區時，本地兩筆立刻就有了，但送到伺服器如果亂序，項目會因為地區還不存在而踩到外鍵錯誤。這是實測撞出來的，不是理論問題。所以 `push()` 收的是「還沒發動的函式」，輪到它才真的送出。
+
+改這段之前先想清楚為什麼它長這樣。
 
 ---
 
-## 6. 連結預覽 / 圖片轉存（唯一要自寫的後端）
+## 3. 權限：PRD §7 那張表對應到哪個 policy
 
-現在 [`store.js:319 fetchPreview()`](src/store.js#L319) 是假的：一組寫死的 regex 對照表，延遲 900ms 回傳罐頭資料。但**SSRF 的防護邏輯已經先寫進去了**，可以直接照抄到後端：
+授權全部在資料庫。前端隱藏按鈕只是 UI，繞過去也寫不進來。
 
-```js
-const PRIVATE_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|\[?::1|\[?fc|\[?fd|\[?fe80)/i
+| PRD 要求 | 實際的 policy | 位置 |
+|---|---|---|
+| 所有 API 檢查呼叫者是 active 成員 | `is_trip_member()` 被幾乎每條 policy 引用 | schema.sql |
+| 寫入個人分頁檢查 `owner_user_id = 呼叫者` | `items_insert` / `items_update` 的 `owner_user_id is null or owner_user_id = auth.uid()` | 同上 |
+| 共同分頁任何成員可增可刪（Q2） | 同上，`owner_user_id is null` 那一半 | 同上 |
+| 他人分頁唯讀（F-11） | 上面兩條的反面，已有測試覆蓋 | rls-test.sql |
+| 編輯／刪除專案限 owner | `trips_update` + `delete_trip` RPC 內的檢查 | 同上 |
+| 只能貼自己的標籤（§4.2） | `item_tags_insert` 同時檢查項目可寫與標籤屬於自己 | 同上 |
+| 撤銷邀請：owner 全部，成員限自己產生的 | `invites_update` | 同上 |
+| 擁有者不能自行離開 | `owner_cannot_leave` CHECK 約束，不是 policy | 同上 |
+
+共 26 條 policy 與 4 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite`）。
+
+**輔助函式一律 `security definer`**，因為 policy 互相引用會無限遞迴。改 policy 前先理解這點。
+
+### 3.1 驗證方式
+
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 35 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤只有自己看得到、非成員完全看不到、刪地區不連帶刪項目等。
+
+```bash
+psql -f supabase/rls-test.sql
 ```
 
-真實版要做的（PRD F-14 / F-28）：
-
-1. 驗證 URL：只允許 `http` / `https`
-2. **DNS 解析後**再檢查是否落在私有網段（只檢查字串會被 DNS rebinding 繞過）
-3. 抓取：逾時 5 秒、回應上限 2 MB
-4. 跟隨轉址（`maps.app.goo.gl`、`goo.gl/maps` 必須支援）
-5. 解析 `og:title` / `og:image` / `og:description`，退回 `<title>`
-6. 下載預覽圖 → 壓縮 → 存進自己的 bucket → 回傳 key
-7. 圖片轉存（F-28）同一支，大小上限 10 MB
-
-驗收條件（PRD 已寫）：
-- 貼 `https://maps.app.goo.gl/xxxx` → 3 秒內帶入店名與圖片
-- 貼 `http://192.168.1.1` → 後端拒絕，前端顯示無法預覽
-
-回傳形狀要維持 `{ title, image, description }`，`ItemForm.vue` 直接吃這個。
+它會先補上 Supabase 專有的 auth / storage 替身再載入 schema，所以要跑在**用完就丟的本機 Postgres**，不要對正式資料庫執行。改動 schema 後請重跑。
 
 ---
 
-## 7. 權限：前端隱藏按鈕不算授權
+## 4. 只有這個專案才有的坑
 
-前端目前只做到「不顯示」：
+這些規則藏在 SQL 或設定裡，只看前端看不到，最容易被下一個人重複實作或踩到。
 
-```js
-// Trip.vue:23
-const editable = computed(() => tabOwner.value === null || tabOwner.value === store.me)
+**帳號大小寫**
+`profiles` 的唯一索引是 `lower(username)` 函式索引，所以 Jean 和 jean 搶不到同一個帳號，但**存進去的是使用者打的原樣**。要用帳號查詢時條件必須寫 `lower(username) = lower($1)` 或 `ilike`，直接 `.eq('username', x)` 會變成大小寫敏感而且吃不到索引。
+
+**顯示名稱留空的 fallback 在資料庫**
+`handle_new_user` 觸發器會 `coalesce(nullif(display_name,''), username)`。前端**不要**再補一份，規則放兩個地方遲早不一致。
+
+**RLS 擋 UPDATE / DELETE 時不會報錯**
+只是靜默影響 0 筆。所以「沒有 error」不等於「成功」。`api.js` 的 `must()` 會數筆數，新增寫入時請沿用它。
+
+**軟刪除必須走 RPC**
+PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_select` 含 `deleted_at is null`。所以直接 `update trips set deleted_at` 會被自己的讀取政策擋掉。已經改成 `delete_trip` RPC，不要改回去。
+
+**假網域鎖死了**
+帳號密碼登入把帳號接上 `@pretravel.app` 湊出 Supabase Auth 需要的 email 格式。Supabase 會拒絕 `.local` 之類的非真實 TLD。**這個值一旦有人註冊就不能再改**，改了等於所有既有帳號都登不進去。
+
+**Supabase 的 Confirm email 必須維持關閉**
+信箱是假的，確認信永遠收不到。開著的話新帳號會卡在未確認而登不進去。
+
+---
+
+## 5. 與 PRD 不一致的地方
+
+| PRD 怎麼寫 | 實際怎麼做 | 為什麼 |
+|---|---|---|
+| F-01 Google OAuth 登入 | **帳號密碼**，完全不收 email | 只給自己和朋友用，接 OAuth 要另外申請用戶端。代價是沒有自助的忘記密碼，要在 Supabase 後台協助重設 |
+| §4.1 `Item` 單一 `url` / `url_title` | `items.links` jsonb 陣列，最多 5 個命名連結 | 一間店常常同時有 Maps 和 IG 兩個來源 |
+| §4.1 `Item.url_image_key` 縮圖欄位 | **已移除**。連結預覽圖會轉存成第一張 `images` | 少一個欄位，卡片縮圖直接取 `images[0]` |
+| §4.1 `ItemImage` 獨立資料表 | `items.images` jsonb 陣列，存 `{ path, w, h }` | App 從不單獨查圖片，拆表只是多一次 join |
+| §4.1 `User.email` | 沒有這個欄位 | 帳號密碼登入拿不到也不需要 email |
+| F-25 共同分頁標籤依名稱合併 | **沒做**。`tags_all` policy 只讓你看到自己的標籤 | 要做的話得放寬標籤的讀取權限，是 P1 需求，先不動 |
+| F-27 圖片壓縮 1600 px | 已對齊（`MAX.item = 1600`） | 原型受 localStorage 限制才壓到 800 |
+
+---
+
+## 6. 連結預覽與圖片轉存
+
+[`api/preview.js`](api/preview.js)（156 行）跑在 Vercel Functions，**不需要任何環境變數**。
+
+`GET /api/preview?url=...` 回傳 `{ title, description, image }`，`image` 是 data URL。前端拿到後走 `uploadImageFromDataUrl()` 壓縮上傳 bucket，資料庫只存路徑。
+
+已實作的防護（PRD F-14）：只允許 http/https、每一跳轉址都重新解析 DNS 並擋私有網段、逾時 5 秒、頁面上限 2 MB、圖片上限 5 MB、最多 5 次轉址。日文網站的 Shift_JIS / EUC-JP 有處理。
+
+貼圖片網址（F-28）走同一支：content-type 是 `image/*` 時整包當圖片回傳。
+
+**已知限制**：DNS 解析後仍用 hostname 連線，理論上擋不掉 DNS rebinding。要根治得自己接 socket 綁 IP 並保留 SNI，對這個規模不值得，程式碼裡有註記。
+
+純函式（私網判斷、OG 解析、編碼偵測、帳號規則）有自我檢查：
+
+```bash
+node scripts/check.mjs
 ```
 
-**這只是 UI，沒有任何實際保護。** 後端必須自己檢查（PRD §7 + F-11 的 AC）：
+**本機測 `/api/preview` 要用 `vercel dev`**，Vite 的 dev server 不會跑 api 資料夾。
 
-| 操作 | 檢查 |
+---
+
+## 7. 還沒做完的
+
+| 項目 | 狀態 |
 |---|---|
-| 所有 API | 呼叫者是該 trip 的 **active 成員** |
-| 寫入個人分頁項目 | `Item.owner_user_id = 呼叫者` |
-| 寫入共同分頁項目 | `Item.owner_user_id IS NULL` 且呼叫者是成員（新增與刪除都開放給任何成員，見 PRD Q2） |
-| 編輯 / 刪除專案 | 呼叫者是 `owner` |
-| 貼標籤 | `Tag.user_id = 呼叫者`（一個項目只能貼**自己的**標籤，不論項目在哪個分頁） |
-| 撤銷邀請 | owner 全部可撤；成員只能撤自己產生的 |
+| F-31 PWA Service Worker | **未做**。manifest 在 [`public/manifest.webmanifest`](public/manifest.webmanifest)，SW 完全沒寫 |
+| F-32 離線可讀 | **未做**。沒有 IndexedDB 也沒有 Cache Storage |
+| F-33 離線可寫 | **半套**。`store.offline` 還是 Trip 頁選單裡的手動開關，`store.pending` 只存在記憶體，重整就消失。真實版要改用 `navigator.onLine` 加上 `online`/`offline` 事件，佇列落地 IndexedDB |
+| F-34 衝突處理 | 未做。目前是誰後寫誰贏，但沒有比對 `updated_at` |
+| 刪除項目時清掉 bucket 檔案 | **未做**。刪項目只刪資料列，圖片會變成孤兒檔。注意 F-12 複製項目時圖片是共用同一個 path，所以要刪檔前得確認沒有其他項目還在引用 |
+| 圖片上傳、邀請流程、成員管理 | 程式寫好了但**沒有端對端實測過**，需要第二個帳號與真的圖檔 |
 
-**F-11 的驗收條件明寫：透過 API 直接對他人分頁寫入必須被拒絕（403），前端隱藏不算完成。** 這條要寫測試。
-
-用 Supabase 的話這整張表可以直接寫成 RLS policy。
+已經實測過的路徑：註冊、登入、跨重整保持登入、建立專案、新增地區、在項目表單當場新增地區與標籤後存檔、重整後資料仍在、軟刪除專案。
 
 ---
 
-## 8. 離線與同步（F-32 / F-33 / F-34）
+## 8. 環境與設定
 
-目前是模擬的：`store.offline` 是一個手動開關，`store.pending` 是一個陣列，切回線上就清空並 toast。
+```bash
+npm run dev          # Vite，不含 /api
+vercel dev           # 含 /api，要測連結預覽用這個
+npm run build
+node scripts/check.mjs
+```
 
-真實版要做：
+環境變數只有兩個，見 [`.env.example`](.env.example)。本機放 `.env.local`（已 gitignore），線上放 Vercel 的 Settings → Environment Variables，**加完必須重新部署**才會生效，因為 `VITE_` 開頭的變數是建置時打包進去的。
 
-| 需求 | 做法 |
-|---|---|
-| F-32 離線可讀 | 曾在線上開過的專案 → 項目資料存 IndexedDB、縮圖存 Cache Storage。頂端顯示「離線模式・資料為 {時間} 版本」（UI 已做，[`Trip.vue:67`](src/pages/Trip.vue#L67)） |
-| F-33 離線可寫 | **只允許**切換購買狀態與已去過。寫入本機佇列（IndexedDB），畫面立即反映，連線後依序送出，成功後清除。其他寫入按鈕停用並提示「需要網路」（UI 已做） |
-| 同步失敗 | 例如項目已被刪除 → 顯示提示並丟棄該筆，不可無聲吞掉 |
-| F-34 衝突 | Last-write-wins，以 `updated_at` 較新者為準，不做欄位合併，不提示 |
-| F-31 PWA | manifest 已在 [`public/manifest.webmanifest`](public/manifest.webmanifest)，**Service Worker 還沒寫** |
+anon key 要整串原樣貼，不要把 `sb_publishable_` 前綴接在 JWT 前面湊，那會回 401。絕對不要用 secret key 或 service_role，它們會繞過所有 RLS。
 
-`setStatus()` 的樂觀更新結構已經寫好了（[`store.js:282`](src/store.js#L282)），照它的形狀換成真的佇列即可。
-
----
-
-## 9. 建議的遷移順序
-
-1. **Google 登入 + User**（F-01）—— 其他全部依賴它。做完 `login()` / `logout()` / `me()`
-2. **Trips + Members + Invites** —— 有真實使用者才有意義
-3. **Regions + Tags** —— 結構簡單，先跑通 CRUD 的 async 改寫模式
-4. **Items** —— 量最大，先不含圖片
-5. **檔案上傳**（頭像 → 旅程封面 → 項目圖片）—— §3
-6. **連結預覽 serverless function** —— §6
-7. **PWA + 離線** —— §8，最後做，因為它要求前面全部穩定
-
-1-4 做完就是一個可用的線上版本，5-7 是體驗。
-
----
-
-## 10. 交接時的驗收清單
-
-前端已完成的部分不需要重做，請對照 [PRD.md 附錄 A](PRD.md) 逐條確認**後端**有接上：
-
-- [ ] Google 登入 / 登出 / 逾期重登，登入狀態保留 ≥ 30 天
-- [ ] 未登入開任一網址 → 導向登入 → 登入後回到原網址（前端 router guard 已做，見 [`router.js:33`](src/router.js#L33)）
-- [ ] Trip / Region / Tag / Item 的 CRUD 全部走 API
-- [ ] **他人分頁寫入回 403**（不是前端擋掉）
-- [ ] 頭像、封面、項目圖片都存在私有 bucket，不是 base64 也不是外部 URL
-- [ ] 「貼圖片網址」走後端轉存，不是直接存外部連結
-- [ ] 圖片前端壓縮調回 F-27 的 1600 px（`MAX.item`），≤ 2 MB
-- [ ] 拿掉 [`store.js:150`](src/store.js#L150) 的 localStorage 配額防護（圖片上 bucket 後就不需要）
-- [ ] 貼連結 3 秒內帶入店名與圖片；貼私有 IP 被後端拒絕
-- [ ] 刪除 Item 連 bucket 檔案一起刪，且不會刪到被複製項目共用的檔案
-- [ ] 離線可讀曾開過的專案；離線切換狀態進佇列，連線後自動送出
-- [ ] 所有寫入失敗都有可見提示與重試，沒有靜默丟失
+Supabase 那邊的設定：Confirm email 關閉；`media` bucket 私有、`avatars` bucket 公開，兩個都由 `schema.sql` 建立。
 
 ---
 
 ## 附錄：專案結構
 
 ```
+api/preview.js        連結預覽 / 圖片轉存（Vercel Function，唯一的伺服器端程式）
+supabase/
+  schema.sql          資料表、RLS、RPC、Storage。可重複執行
+  rls-test.sql        權限驗證，35 項。跑在用完就丟的本機 Postgres
+scripts/check.mjs     純函式自我檢查
 src/
-  store.js          ← 唯一的資料層，接 API 幾乎只改這裡
-  router.js         ← 路由 + 未登入導向
-  style.css         ← 設計 token（深淺色兩套值）、共用元件類別、動畫
+  supabase.js         client、帳號密碼登入、簽名網址
+  api.js              所有 Supabase 存取與欄位轉換
+  store.js            畫面資料來源、樂觀更新
+  auth-rules.js       帳號密碼驗證規則的唯一定義
+  router.js           路由 + 未登入導向（會等 bootstrap 讀完 session）
+  style.css           設計 token、共用元件類別、動畫
   pages/
-    Login.vue       P-01   現在是「選示範帳號」，要換成 Google OAuth
-    Trips.vue       P-02   旅程列表（資料夾卡）
-    Profile.vue     P-11   個人資料（姓名 / 頭像）← PRD 沒有，後加的
-    TripForm.vue    P-03   建立 / 編輯專案（封面上傳在這）
-    Trip.vue        P-04   專案頁：分頁列 / 子清單 / 篩選 / 清單
-    ItemForm.vue    P-05   新增 / 編輯項目（連結預覽、圖片上傳在這）
+    Login.vue       P-01   帳號密碼登入與註冊
+    Trips.vue       P-02   旅程列表
+    Profile.vue     P-11   個人資料（PRD 沒有，後加的）
+    TripForm.vue    P-03   建立 / 編輯專案，封面上傳
+    Trip.vue        P-04   分頁列 / 子清單 / 篩選 / 清單
+    ItemForm.vue    P-05   新增 / 編輯項目，連結預覽與圖片上傳
     ItemDetail.vue  P-06
     Members.vue     P-07   成員與邀請
     Regions.vue     P-08
     Tags.vue        P-09
-    Invite.vue      P-10   接受邀請
+    Invite.vue      P-10   接受邀請，走 invite_preview RPC
   components/
     TopBar / Sheet / ItemCard / TagChip / Avatar / ThemeToggle
 ```
 
-**設計層不用動。** `style.css` 的色票、深淺色切換、動畫、`.btn-*` / `.chip-*` / `.card` 等共用類別都已完成，接 API 時不需要碰。
+**設計層不用動。** `style.css` 的色票、深淺色切換、動畫、`.btn-*` / `.chip-*` / `.card` 等共用類別都已完成。
