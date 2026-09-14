@@ -1,1 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#0f766e"/><circle cx="256" cy="256" r="96" fill="#ffffff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="行前清單">
+  <!-- 主體維持在 10%–90% 的範圍內，Android 的 maskable 裁切不會切到籃子 -->
+  <rect width="512" height="512" fill="#335C67"/>
+  <defs>
+    <path id="env" d="M256 58c79 0 143 64 143 142 0 58-47 112-99 151h-88c-52-39-99-93-99-151 0-78 64-142 143-142z"/>
+    <clipPath id="clip"><use href="#env"/></clipPath>
+  </defs>
+  <use href="#env" fill="#E09F3E"/>
+  <g clip-path="url(#clip)" fill="#F3D9B8">
+    <ellipse cx="190" cy="200" rx="25" ry="175"/>
+    <ellipse cx="322" cy="200" rx="25" ry="175"/>
+  </g>
+  <path d="M222 349l6 46M290 349l-6 46" stroke="#F3D9B8" stroke-width="12" stroke-linecap="round" fill="none"/>
+  <rect x="212" y="392" width="88" height="64" rx="16" fill="#F3D9B8"/>
+</svg>
