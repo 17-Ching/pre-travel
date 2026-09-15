@@ -43,7 +43,7 @@ const toItem = r => ({
 const hhmm = t => (t ? String(t).slice(0, 5) : '')
 
 const toEntry = r => ({
-  id: r.id, tripId: r.trip_id, date: r.date, section: r.section, slot: r.slot,
+  id: r.id, tripId: r.trip_id, date: r.date, endDate: r.end_date, section: r.section, slot: r.slot,
   kind: r.kind, itemId: r.item_id, title: r.title ?? '',
   transportMode: r.transport_mode ?? '',
   startTime: hhmm(r.start_time), endTime: hhmm(r.end_time),
@@ -57,6 +57,7 @@ const toEntry = r => ({
 const entryRow = e => ({
   trip_id: e.tripId,
   date: e.date,
+  end_date: e.kind === 'stay' ? e.endDate : null,
   section: e.section,
   slot: e.slot,
   kind: e.kind ?? 'place',
@@ -290,6 +291,7 @@ export async function updateEntry(id, patch) {
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done
   if ('date' in patch) row.date = patch.date
+  if ('endDate' in patch) row.end_date = patch.endDate || null
   if ('section' in patch) row.section = patch.section
   if ('slot' in patch) row.slot = patch.slot
   if ('order' in patch) row.sort_order = patch.order

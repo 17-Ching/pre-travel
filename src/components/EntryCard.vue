@@ -1,16 +1,18 @@
 <script setup>
 import { computed } from 'vue'
-import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff } from '@phosphor-icons/vue'
+import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed } from '@phosphor-icons/vue'
 import { entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user } from '../store'
 import Avatar from './Avatar.vue'
 
-const props = defineProps({ entry: Object })
+// badge：住宿用來標「入住 / 第 2 晚 / 退房・共 3 晚」，由呼叫端算好（它才知道現在看的是哪天）
+const props = defineProps({ entry: Object, badge: String })
 defineEmits(['toggle', 'menu'])
 
 const title = computed(() => entryTitle(props.entry))
 const thumb = computed(() => entryThumb(props.entry))
 const detached = computed(() => entryDetached(props.entry))
 const isFlight = computed(() => props.entry.kind === 'flight')
+const isStay = computed(() => props.entry.kind === 'stay')
 // 航班跟交通共用同一套外觀（左側直線 + 淡底），只有圖示與副標不同
 const isTransport = computed(() => props.entry.kind !== 'place')
 // 誰搭這班。沒指定就是全員，不佔版面
@@ -24,6 +26,10 @@ const source = computed(() => {
 // F-40：有 start_time 才算「有時間」，要一眼看得出來
 const timeLabel = computed(() => {
   const { startTime, endTime } = props.entry
+  // 住宿的兩個時間不是一段區間，是入住與退房，分開講才看得懂
+  if (isStay.value) {
+    return [startTime && `入住 ${startTime}`, endTime && `退房 ${endTime}`].filter(Boolean).join('・')
+  }
   if (!startTime) return ''
   if (!endTime) return startTime
   // 紅眼航班：抵達比起飛早就是隔天到，不標的話看起來像打錯
@@ -42,7 +48,7 @@ const timeLabel = computed(() => {
     <!-- 卡片本身就是開抽屜的按鈕，不必瞄準右邊那三個點；勾選鈕在外面，不會被誤觸 -->
     <button type="button" class="flex min-w-0 flex-1 gap-2.5 text-left" :aria-label="`${title} 的動作`" @click="$emit('menu')">
       <span v-if="isTransport" class="flex size-11 shrink-0 items-center justify-center rounded-[10px] bg-tint/15 text-tint">
-        <component :is="isFlight ? PhAirplaneTakeoff : PhArrowRight" :size="20" weight="bold" />
+        <component :is="isFlight ? PhAirplaneTakeoff : isStay ? PhBed : PhArrowRight" :size="20" weight="bold" />
       </span>
       <span v-else class="relative size-11 shrink-0">
         <img v-if="thumb" :src="thumb" alt="" loading="lazy" class="size-full rounded-[10px] bg-line object-cover" />
@@ -54,6 +60,9 @@ const timeLabel = computed(() => {
 
       <span class="min-w-0 flex-1">
         <!-- 時間徽章放標題上面，掃一眼就知道哪幾筆有約定時間 -->
+        <span v-if="badge" class="mb-1 mr-1.5 inline-flex items-center rounded-md bg-tint-soft px-1.5 py-0.5 text-[11px] font-bold text-tint">
+          {{ badge }}
+        </span>
         <span v-if="timeLabel"
           class="mb-1 inline-flex items-center rounded-md bg-accent-soft px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-accent">
           {{ timeLabel }}

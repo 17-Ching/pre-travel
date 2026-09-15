@@ -35,7 +35,7 @@
 
 **資料庫是 snake_case，畫面用 camelCase，轉換全部關在 `api.js` 裡。** 其他檔案看不到 `owner_user_id` 這種名字。
 
-`src/auth-rules.js`（13 行）是帳號密碼的驗證規則，刻意不 import Supabase SDK，任何地方都能安全 import。`supabase.js` 從它 re-export，規則只有一份定義。
+`src/auth-rules.js`（13 行）是帳號密碼的驗證規則，刻意不 import Supabase SDK，任何地方都能安全 import。`supabase.js` 從它 re-export，規則只有一份定義。`src/date-rules.js` 同樣的道理：日期字串運算與住宿的跨日規則放在那裡，`store.js` re-export，`node scripts/check.mjs` 才測得到（store.js 在模組載入時就會碰 `localStorage`，Node 直接 import 會炸）。
 
 ---
 
@@ -239,6 +239,8 @@ src/
   api.js              所有 Supabase 存取與欄位轉換
   store.js            畫面資料來源、樂觀更新
   auth-rules.js       帳號密碼驗證規則的唯一定義
+  date-rules.js       日期字串運算與住宿的跨日規則，無相依，check.mjs 直接測這支
+  link-preview.js     F-14 連結預覽的共用狀態機，清單表單與行程表單都用這支
   router.js           路由 + 未登入導向（會等 bootstrap 讀完 session）
   style.css           設計 token、共用元件類別、動畫
   pages/
@@ -254,8 +256,8 @@ src/
     Tags.vue        P-09
     Invite.vue      P-10   接受邀請，走 invite_preview RPC
   components/
-    Itinerary.vue   行程分頁的完整版面：日期列、出發／回程航班區、三時段、五餐別、每日備註
-    EntryCard.vue   行程卡片：一般 / 交通 / 航班三種樣式、時間徽章（紅眼班機標 +1）、乘客頭像、完成勾選
+    Itinerary.vue   行程分頁的完整版面：日期列、出發／回程航班區、住宿區、三時段、五餐別、每日備註
+    EntryCard.vue   行程卡片：一般 / 交通 / 航班 / 住宿四種樣式、時間徽章（紅眼班機標 +1）、乘客頭像、完成勾選
     TopBar / Sheet / ItemCard / TagChip / Avatar / ThemeToggle
 ```
 

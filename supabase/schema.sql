@@ -117,8 +117,11 @@ create table if not exists public.itinerary_entries (
   date           date not null,
   section        text not null check (section in ('schedule', 'meal')),
   slot           text not null,
-  -- flight 是交通的一種，但有自己的版面（第一天／最後一天的航班區）與跨日規則
-  kind           text not null default 'place' check (kind in ('place', 'transport', 'flight')),
+  -- flight 是交通的一種，但有自己的版面（第一天／最後一天的航班區）與跨日規則。
+  -- stay 是住宿，唯一會跨多天的 kind：date = 入住日，end_date = 退房日，中間每一天都看得到它。
+  kind           text not null default 'place' check (kind in ('place', 'transport', 'flight', 'stay')),
+  -- 只有住宿會用到。其他 kind 一律 null，不要拿它當「結束日期」的通用欄位。
+  end_date       date,
   -- 誰搭這班。同行的人可能搭不同班，所以一天可以有好幾筆，各自標人。
   -- 空陣列＝沒特別指定（全員）。不設 FK：陣列沒辦法設，成員被刪掉時前端就查不到人、自然不顯示。
   passenger_ids  uuid[] not null default '{}',
@@ -157,8 +160,14 @@ create table if not exists public.itinerary_entries (
   constraint transport_has_no_item check (kind = 'place' or item_id is null),
   -- 沒有引用就必須自己有標題（F-38）
   constraint title_or_item_required check (item_id is not null or char_length(btrim(title)) > 0),
-  -- 紅眼航班：23:05 起飛、隔天 05:30 抵達是常態，只有航班放行 end < start
-  constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind = 'flight')
+  -- 住宿一定要有退房日，其他 kind 不准用 end_date（見上面的欄位註解）
+  constraint stay_has_range check (
+    (kind = 'stay' and end_date is not null and end_date >= date)
+    or (kind <> 'stay' and end_date is null)
+  ),
+  -- 紅眼航班（23:05 起飛、隔天 05:30 抵達）與住宿（15:00 入住、隔天 11:00 退房）
+  -- 的「結束」本來就在隔天，只有這兩種放行 end < start
+  constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind in ('flight', 'stay'))
 );
 
 -- TripDay：只在真的寫備註時才會有資料列（PRD §4.1）
@@ -178,12 +187,20 @@ alter table public.itinerary_entries drop constraint if exists itinerary_entries
 alter table public.itinerary_entries add constraint itinerary_entries_note_check check (char_length(note) <= 2000);
 -- 航班（kind = 'flight'）。既有資料庫的三個 CHECK 都要換掉，內容跟上面 create table 裡的一致
 alter table public.itinerary_entries add column if not exists passenger_ids uuid[] not null default '{}';
-alter table public.itinerary_entries drop constraint if exists itinerary_entries_kind_check;
-alter table public.itinerary_entries add constraint itinerary_entries_kind_check check (kind in ('place', 'transport', 'flight'));
 alter table public.itinerary_entries drop constraint if exists transport_has_no_item;
 alter table public.itinerary_entries add constraint transport_has_no_item check (kind = 'place' or item_id is null);
+-- 住宿（kind = 'stay'，跨多天）
+alter table public.itinerary_entries add column if not exists end_date date;
+alter table public.itinerary_entries drop constraint if exists itinerary_entries_kind_check;
+alter table public.itinerary_entries add constraint itinerary_entries_kind_check check (kind in ('place', 'transport', 'flight', 'stay'));
+alter table public.itinerary_entries drop constraint if exists stay_has_range;
+alter table public.itinerary_entries add constraint stay_has_range check (
+  (kind = 'stay' and end_date is not null and end_date >= date)
+  or (kind <> 'stay' and end_date is null));
 alter table public.itinerary_entries drop constraint if exists end_after_start;
-alter table public.itinerary_entries add constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind = 'flight');
+alter table public.itinerary_entries add constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind in ('flight', 'stay'));
+-- 翻某一天時要一起撈出「涵蓋這天」的住宿
+create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 
 create index if not exists items_trip_idx        on public.items (trip_id);
 create index if not exists items_owner_idx       on public.items (trip_id, owner_user_id, type);

@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict'
 import { isBlocked, meta, decode, toText } from '../api/preview.js'
 import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials } from '../src/auth-rules.js'
+import { addDays, daysBetween, coversDate, stayNights, stayDayLabel } from '../src/date-rules.js'
 
 // ── SSRF 阻擋名單（F-14）
 for (const ip of [
@@ -57,5 +58,30 @@ assert.equal(validateCredentials('jean', 'secret123'), '')
 assert.match(validateCredentials('ab', 'secret123'), /帳號/)
 assert.match(validateCredentials('jean', '12345'), /密碼/)
 assert.equal(validateCredentials('jean', 'x'.repeat(MIN_PASSWORD)), '', `剛好 ${MIN_PASSWORD} 個字要過`)
+
+// ── 日期與住宿（F-49）
+// 跨月、跨年、閏日都要對，這三個是 addDays 最常出錯的地方
+assert.equal(addDays('2026-09-30', 1), '2026-10-01')
+assert.equal(addDays('2026-12-31', 1), '2027-01-01')
+assert.equal(addDays('2028-02-28', 1), '2028-02-29', '2028 是閏年')
+assert.equal(addDays('2026-10-01', -1), '2026-09-30')
+assert.equal(daysBetween('2026-09-13', '2026-09-16'), 3)
+
+// 9/13 入住、9/16 退房 = 住 3 晚，四天都看得到這筆
+const stay = { date: '2026-09-13', endDate: '2026-09-16' }
+assert.equal(stayNights(stay), 3)
+for (const d of ['2026-09-13', '2026-09-14', '2026-09-15', '2026-09-16']) {
+  assert.equal(coversDate(stay, d), true, `${d} 應該看得到這筆住宿`)
+}
+assert.equal(coversDate(stay, '2026-09-12'), false)
+assert.equal(coversDate(stay, '2026-09-17'), false, '退房日的隔天不該再出現')
+
+assert.equal(stayDayLabel(stay, '2026-09-13'), '入住')
+assert.equal(stayDayLabel(stay, '2026-09-14'), '第 2 晚')
+assert.equal(stayDayLabel(stay, '2026-09-15'), '第 3 晚')
+assert.equal(stayDayLabel(stay, '2026-09-16'), '退房')
+
+// 同日進出仍算 1 晚，不要顯示 0 晚
+assert.equal(stayNights({ date: '2026-09-13', endDate: '2026-09-13' }), 1)
 
 console.log('檢查通過')

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { PhX, PhLink, PhImage, PhPlus } from '@phosphor-icons/vue'
 import { store, item as getItem, regionsOf, myTags, ensureTag, addRegion, saveItem, fetchPreview, tagColor, toast,
   uploadItemImage, uploadImageFromDataUrl, MAX_LINKS, newLink, sourceLabel } from '../store'
+import { useLinkPreview } from '../link-preview'
 import TopBar from '../components/TopBar.vue'
 
 const route = useRoute(), router = useRouter()
@@ -31,25 +32,21 @@ function onRegion(e) {
   e.target.value = f.value.regionId ?? ''
 }
 
-// F-14 連結預覽。每個連結各自抓，只填「還空著」的欄位，所以不需要覆蓋確認。
-const previews = ref({}) // linkId -> { state, url, data }
+// F-14 連結預覽。抓取與狀態在 useLinkPreview（行程那邊共用同一支），
+// 這裡只做清單專屬的後續：補項目標題、把預覽圖轉存進圖片列。
+const { previews, load } = useLinkPreview()
 function addLink() { if (f.value.links.length < MAX_LINKS) f.value.links.push(newLink()) }
-function removeLink(i) { delete previews.value[f.value.links[i].id]; f.value.links.splice(i, 1) }
+function removeLink(i) { f.value.links.splice(i, 1) }
 async function onUrl(l) {
-  const url = l.url.trim()
-  if (!url || url === previews.value[l.id]?.url) return
-  previews.value[l.id] = { state: 'loading', url }
-  try {
-    const d = await fetchPreview(url)
-    previews.value[l.id] = { state: 'ok', url, data: d }
-    if (!l.title.trim()) l.title = d.title
-    if (!f.value.title.trim()) f.value.title = d.title
-    // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）
-    if (d.image && !f.value.images.length) {
-      try { f.value.images.push(await uploadImageFromDataUrl(tripId, d.image)) } catch { /* 有標題就夠用了 */ }
-    }
-  } catch { previews.value[l.id] = { state: 'fail', url } }
+  const d = await load(l)
+  if (!d) return
+  if (!f.value.title.trim()) f.value.title = d.title
+  // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）
+  if (d.image && !f.value.images.length) {
+    try { f.value.images.push(await uploadImageFromDataUrl(tripId, d.image)) } catch { /* 有標題就夠用了 */ }
+  }
 }
+// paste 事件當下 input 的值還是舊的，要等瀏覽器寫進去才讀得到
 const onPaste = l => setTimeout(() => onUrl(l))
 function addDesc(l) {
   const d = previews.value[l.id]?.data?.description

@@ -4,6 +4,7 @@
 // 這也是 PRD F-19 / F-33 要的行為，離線佇列之後接在同一個位置。
 import { reactive, watch } from 'vue'
 import * as api from './api'
+import { WEEK, parseDate, todayISO, addDays, coversDate } from './date-rules'
 import { sb, isConfigured, signIn as authSignIn, signUp as authSignUp, signOut as authSignOut } from './supabase'
 
 const uid = () => crypto.randomUUID()
@@ -494,15 +495,9 @@ export function removeMember(tripId, userId) {
 }
 export const leaveTrip = tripId => removeMember(tripId, store.me)
 
-// ---- 行程（F-37 到 F-47）----
-// 日期一律用 'YYYY-MM-DD' 字串處理。不要用 new Date('2026-11-12')，
-// 那會被當成 UTC 午夜解析，在 UTC+8 算出來就是前一天。D8 說不做時區換算，
-// 這裡的做法就是從頭到尾不讓 Date 碰到日期的語意。
-const WEEK = ['日', '一', '二', '三', '四', '五', '六']
-const parseDate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
-const isoOf = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-export const todayISO = () => isoOf(new Date())
-export const addDays = (iso, n) => { const d = parseDate(iso); d.setDate(d.getDate() + n); return isoOf(d) }
+// ---- 行程（F-37 到 F-49）----
+// 日期的算法全部在 date-rules.js，那支沒有相依，可以直接跑測試
+export { todayISO, addDays, stayNights, stayDayLabel } from './date-rules'
 
 // F-37 的日期列 + F-46 的範圍外日子。元件直接拿這個畫，不用自己算日期。
 export function tripDays(tripId) {
@@ -533,9 +528,10 @@ const byTimeThenOrder = (a, b) => {
   if (b.startTime) return 1
   return a.order - b.order
 }
-// 航班有自己的區塊（出發日／回程日），所以不出現在三個時段的清單裡
+// 航班與住宿有自己的區塊，所以不出現在三個時段的清單裡
+const inSlots = e => !e.kind || e.kind === 'place' || e.kind === 'transport'  // kind 未給時等同 place
 export const entriesOf = (tripId, date, section, slot) => store.entries
-  .filter(e => e.tripId === tripId && e.date === date && e.section === section && e.slot === slot && e.kind !== 'flight')
+  .filter(e => e.tripId === tripId && e.date === date && e.section === section && e.slot === slot && inSlots(e))
   .sort(byTimeThenOrder)
 
 // 同一天可以有好幾班：同行的人搭不同班
@@ -543,16 +539,22 @@ export const flightsOf = (tripId, date) => store.entries
   .filter(e => e.tripId === tripId && e.date === date && e.kind === 'flight')
   .sort(byTimeThenOrder)
 
+// 住宿是唯一跨多天的：一筆從入住日到退房日，中間每一天都看得到它。
+// 一趟旅程可以有好幾筆（換飯店），日期重疊也不擋（換宿當天兩邊都看得到）。
+export const staysOf = (tripId, date) => store.entries
+  .filter(e => e.tripId === tripId && e.kind === 'stay' && coversDate(e, date))
+  .sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order)
+
 // 紅眼航班：抵達時間比起飛早就是隔天到（資料庫的 end_after_start 對 flight 放行）
 export const arrivesNextDay = e => Boolean(e.kind === 'flight' && e.startTime && e.endTime && e.endTime < e.startTime)
 
 export function daySummary(tripId, date) {
   const list = store.entries.filter(e => e.tripId === tripId && e.date === date)
   return {
-    schedule: list.filter(e => e.section === 'schedule' && e.kind !== 'flight').length,
+    schedule: list.filter(e => e.section === 'schedule' && inSlots(e)).length,
     meal: list.filter(e => e.section === 'meal').length,
     flight: list.filter(e => e.kind === 'flight').length,
-    done: list.filter(e => e.done).length,
+    done: list.filter(e => e.done && e.kind !== 'stay').length,
   }
 }
 
@@ -573,14 +575,17 @@ export const scheduledSlots = itemId => store.entries
   .filter(e => e.itemId === itemId)
   .map(({ date, section, slot }) => ({ date, section, slot }))
 
+// 航班與住宿各自成區，排序跟時段裡的項目不混在一起
 const nextOrder = (tripId, date, section, slot, kind) =>
-  (kind === 'flight' ? flightsOf(tripId, date) : entriesOf(tripId, date, section, slot))
+  (kind === 'flight' ? flightsOf(tripId, date)
+    : kind === 'stay' ? staysOf(tripId, date)
+    : entriesOf(tripId, date, section, slot))
     .reduce((m, e) => Math.max(m, e.order + 1), 0)
 
 function buildEntry(d, order) {
   return reactive({
     id: uid(),
-    tripId: d.tripId, date: d.date, section: d.section, slot: d.slot,
+    tripId: d.tripId, date: d.date, endDate: d.endDate ?? null, section: d.section, slot: d.slot,
     kind: d.kind ?? 'place',
     itemId: d.itemId ?? null,
     title: (d.title ?? '').trim(),
@@ -615,7 +620,7 @@ export function addEntries(list) {
   if (!list.length) return []
   const counters = new Map()
   const built = list.map(d => {
-    const key = `${d.date}|${d.section}|${d.slot}|${d.kind === 'flight' ? 'flight' : ''}`
+    const key = `${d.date}|${d.section}|${d.slot}|${inSlots(d) ? '' : d.kind}`
     const base = counters.get(key) ?? nextOrder(d.tripId, d.date, d.section, d.slot, d.kind)
     counters.set(key, base + 1)
     return buildEntry(d, base)
