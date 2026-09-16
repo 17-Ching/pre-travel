@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhX, PhLink, PhImage, PhPlus } from '@phosphor-icons/vue'
 import { store, item as getItem, regionsOf, myTags, ensureTag, addRegion, saveItem, fetchPreview, tagColor, toast,
-  uploadItemImage, uploadImageFromDataUrl, MAX_LINKS, newLink, sourceLabel } from '../store'
+  uploadItemImage, uploadImageFromDataUrl, MAX_LINKS, newLink, sourceLabel, thumbOf } from '../store'
 import { useLinkPreview } from '../link-preview'
 import TopBar from '../components/TopBar.vue'
 
@@ -125,7 +125,8 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
       <span class="label">圖片（最多 5 張）</span>
       <div class="grid grid-cols-4 gap-2">
         <div v-for="(im, i) in f.images" :key="im.url" class="relative">
-          <img :src="im.url" alt="" class="aspect-square w-full rounded-lg bg-line object-cover" />
+          <!-- 四欄的格子只有 80px 上下，跟卡片一樣吃縮圖就好，舊資料沒有才退回原圖 -->
+          <img :src="thumbOf(im)" alt="" class="aspect-square w-full rounded-lg bg-line object-cover" />
           <button class="absolute -right-1.5 -top-1.5 flex size-6 items-center justify-center rounded-full bg-ink text-surface" aria-label="移除圖片" @click="f.images.splice(i, 1)"><PhX :size="12" weight="bold" /></button>
         </div>
         <label v-if="f.images.length < 5" :class="['flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-line bg-card text-muted', busy && 'pointer-events-none opacity-50']">

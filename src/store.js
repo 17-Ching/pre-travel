@@ -43,6 +43,11 @@ export function sourceLabel(url) {
   try { return new URL(url).hostname.replace(/^www\./, '') } catch { return '' }
 }
 // 一個項目可以有多個命名連結。沒命名就退回來源名稱，再退回網址本身。
+// 小格子（列表卡片 88px、行程卡片 44px、編輯表單 80px）一律吃 400px 的縮圖，
+// 不要掛 1600px 的原圖。縮圖是後來才加的，舊資料沒有 thumbUrl 就退回原圖，
+// 不能讓它變破圖。三個地方共用這一支，免得之後新增一個縮圖位置又忘了退路。
+export const thumbOf = im => im?.thumbUrl || im?.url || ''
+
 export const MAX_LINKS = 5
 export const newLink = () => ({ id: uid(), url: '', title: '' })
 export const linkLabel = l => l.title?.trim() || sourceLabel(l.url) || l.url
@@ -126,11 +131,15 @@ const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 async function attachImageUrls() {
   const paths = [
     ...store.trips.map(t => t.coverPath),
-    ...store.items.flatMap(i => i.images.map(im => im.path)),
+    ...store.items.flatMap(i => i.images.flatMap(im => [im.path, im.thumbPath])),
   ]
   const signed = await api.signPaths(paths)
   for (const t of store.trips) t.cover = signed.get(t.coverPath) || ''
-  for (const i of store.items) for (const im of i.images) im.url = signed.get(im.path) || ''
+  for (const i of store.items) for (const im of i.images) {
+    im.url = signed.get(im.path) || ''
+    // 縮圖是後來才加的，舊資料沒有 thumbPath，這裡就是空字串，畫面那邊要退回 url
+    im.thumbUrl = signed.get(im.thumbPath) || ''
+  }
 }
 
 // 剛登入或剛註冊時，Supabase 簽出來的 token 有一兩秒會比 PostgREST 節點的時鐘
@@ -205,31 +214,57 @@ export async function logout() {
 
 // ---- images
 // F-27 的前端壓縮。canvas 縮完轉成 Blob 上傳 bucket，資料庫只存路徑。
-export const MAX = { avatar: 256, cover: 1024, item: 1600 }
-function drawScaled(file, max) {
+export const MAX = { avatar: 256, cover: 1024, item: 1600, thumb: 400 }
+
+// 解一次碼，要幾個尺寸就畫幾次。手機拍的照片動輒一千兩百萬畫素，
+// 同一張解兩次等於峰值記憶體加倍，iOS Safari 的 canvas 有總量上限，
+// 踩到就是整張圖失敗（使用者只會看到「讀不到」）。
+function loadImage(file) {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const src = URL.createObjectURL(file)
-    img.onload = () => {
-      const s = Math.min(1, max / Math.max(img.width, img.height))
-      const c = document.createElement('canvas')
-      c.width = Math.round(img.width * s)
-      c.height = Math.round(img.height * s)
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
-      URL.revokeObjectURL(src)
-      c.toBlob(b => (b ? resolve({ blob: b, w: c.width, h: c.height }) : reject(new Error('encode'))), 'image/jpeg', 0.82)
-    }
+    img.onload = () => resolve({ img, release: () => URL.revokeObjectURL(src) })
     img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('decode')) }
     img.src = src
   })
 }
 
-// 回傳 { path, url, w, h }：path 進資料庫，url 給畫面立刻顯示
+function scaleTo(img, max) {
+  return new Promise((resolve, reject) => {
+    const s = Math.min(1, max / Math.max(img.width, img.height))
+    const c = document.createElement('canvas')
+    c.width = Math.round(img.width * s)
+    c.height = Math.round(img.height * s)
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
+    c.toBlob(b => (b ? resolve({ blob: b, w: c.width, h: c.height }) : reject(new Error('encode'))), 'image/jpeg', 0.82)
+  })
+}
+
+async function drawScaled(file, max) {
+  const { img, release } = await loadImage(file)
+  try { return await scaleTo(img, max) } finally { release() }
+}
+
+// 回傳 { path, url, w, h, thumbPath, thumbUrl }：path 進資料庫，url 給畫面立刻顯示。
+// 另外存一張 400px 的縮圖，是因為列表卡片只有 88px，直接掛 1600px 的原圖等於
+// 每張卡片多下載三十倍的量，第一屏六八張就要吃掉兩三 MB。
+// 免費方案不能用 image transformation，所以只能在上傳當下自己多存一張。
 export async function uploadItemImage(tripId, file, max = MAX.item) {
-  const { blob, w, h } = await drawScaled(file, max)
-  const path = await api.uploadImage(tripId, blob)
-  const signed = await api.signPaths([path])
-  return { path, url: signed.get(path) || URL.createObjectURL(blob), w, h }
+  const { img, release } = await loadImage(file)
+  let full, small
+  try {
+    full = await scaleTo(img, max)
+    small = await scaleTo(img, MAX.thumb)
+  } finally { release() }
+  const [path, thumbPath] = await Promise.all([
+    api.uploadImage(tripId, full.blob),
+    api.uploadImage(tripId, small.blob),
+  ])
+  const signed = await api.signPaths([path, thumbPath])
+  return {
+    path, url: signed.get(path) || URL.createObjectURL(full.blob), w: full.w, h: full.h,
+    thumbPath, thumbUrl: signed.get(thumbPath) || URL.createObjectURL(small.blob),
+  }
 }
 
 // F-14 / F-28：連結預覽圖與貼上的圖片網址都要轉存成自己的副本，
@@ -585,7 +620,7 @@ export const dayNote = (tripId, date) =>
 // 引用的是活的資料（Q10）：被引用項目改標題或換照片，行程跟著變。
 // F-47 斷開引用後 title 變成快照，這兩支負責把判斷收在一個地方。
 export const entryTitle = e => (e.itemId ? item(e.itemId)?.title || e.title : e.title)
-export const entryThumb = e => (e.itemId ? item(e.itemId)?.images?.[0]?.url || '' : '')
+export const entryThumb = e => thumbOf(e.itemId ? item(e.itemId)?.images?.[0] : null)
 // 「使用者自己打的」和「引用被刪掉後斷開的」資料長得一模一樣，
 // item_id 都是 null、title 都有值，所以必須靠資料庫留下的記號來分，
 // 前端推不出來。detached_at 由 F-47 的觸發器寫入。

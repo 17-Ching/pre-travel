@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { PhMapPin, PhShoppingBag, PhCheck, PhDotsThreeVertical } from '@phosphor-icons/vue'
-import { store, user, sourceLabel, firstUrl, scheduledSlots } from '../store'
+import { store, user, sourceLabel, firstUrl, scheduledSlots, thumbOf } from '../store'
 import TagChip from './TagChip.vue'
 import Avatar from './Avatar.vue'
 
@@ -9,7 +9,7 @@ const props = defineProps({ item: Object, editable: Boolean, showAuthor: Boolean
 const emit = defineEmits(['status', 'visited', 'menu'])
 
 // 連結預覽圖在儲存時就被轉存成第一張圖片了，這裡不用再管外部網址
-const thumb = computed(() => props.item.images[0]?.url || '')
+const thumb = computed(() => thumbOf(props.item.images[0]))
 const region = computed(() => store.regions.find(r => r.id === props.item.regionId)?.name)
 const tags = computed(() => props.item.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean))
 const done = computed(() => (props.item.type === 'shopping' ? props.item.status === 'bought' : props.item.visited))

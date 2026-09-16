@@ -83,7 +83,8 @@ const itemRow = i => ({
   title: i.title.trim().slice(0, 100),
   region_id: i.regionId || null,
   links: (i.links ?? []).filter(l => l.url?.trim()),
-  images: (i.images ?? []).map(({ path, w, h }) => ({ path, w, h })),
+  // thumbPath 一定要跟著寫回去，這是 jsonb，漏一個欄位就等於永久丟掉那張縮圖
+  images: (i.images ?? []).map(({ path, thumbPath, w, h }) => ({ path, thumbPath, w, h })),
   note: (i.note ?? '').slice(0, 2000),
   visited: Boolean(i.visited),
   purchase_status: i.status ?? 'todo',
