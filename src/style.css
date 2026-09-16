@@ -219,13 +219,25 @@ dialog.sheet::backdrop {
               overlay 260ms allow-discrete,
               display 260ms allow-discrete;
 }
-/* 關閉：150ms、加速曲線，點了「取消」不要還要等它慢慢滑下去 */
+/* 關閉：150ms、加速曲線，點了「取消」不要還要等它慢慢滑下去。
+   關閉狀態必須真的不可互動。上面的 `dialog.sheet { display: flex }` 會蓋掉瀏覽器預設的
+   `dialog:not([open]) { display: none }`，所以關起來的抽屜其實還在畫面上，
+   只是被 translate 推到視窗下方 —— 實測五個關閉的抽屜都是 visible / pointer-events: auto。
+   Chrome 上量不出問題，但這正是 Safari「看得到卻點不到」那一類的成因。
+   display 交給 allow-discrete 延到動畫結束才生效，所以退場動畫照跑；
+   pointer-events 與 visibility 立刻生效，動畫期間也不會攔到點擊。 */
 dialog.sheet:not([open]),
 dialog.sheet:not([open])::backdrop {
   transition: translate 150ms cubic-bezier(0.4, 0, 1, 1),
               opacity 150ms linear,
+              visibility 150ms,
               overlay 150ms allow-discrete,
               display 150ms allow-discrete;
+}
+dialog.sheet:not([open]) {
+  display: none;
+  visibility: hidden;
+  pointer-events: none;
 }
 dialog.sheet { translate: 0 0; }
 dialog.sheet::backdrop { opacity: 1; }

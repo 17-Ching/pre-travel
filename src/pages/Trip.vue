@@ -7,6 +7,7 @@ import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatu
   tripDays, addEntry, entryFromItem, scheduledSlots } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
+import LoadState from '../components/LoadState.vue'
 import ItemCard from '../components/ItemCard.vue'
 import Itinerary from '../components/Itinerary.vue'
 import Sheet from '../components/Sheet.vue'
@@ -14,7 +15,11 @@ import Sheet from '../components/Sheet.vue'
 const route = useRoute(), router = useRouter()
 const tripId = route.params.tripId
 const t = computed(() => trip(tripId))
-if (!t.value) router.replace('/')
+// 這裡以前是 `if (!t.value) router.replace('/')`。不能在 setup 裡同步跳轉：
+// store 還沒載完時一定會踩到（專案當然找不到），而且會跟邀請頁正在進行的
+// router.replace 撞在一起，結果是畫面停在一個點不動的狀態，要上一頁再返回才好。
+// 改成用畫面表達：沒載完顯示載入中，載完真的找不到才顯示找不到，都不導航。
+const missing = computed(() => store.ready && !store.loading && !store.loadError && !t.value)
 const p = prefs(tripId) // F-09 / F-24: tab, type and filters remembered locally
 // 舊的 prefs 只有一個 tab，值可能是 'shared'（v2.0 移除）、'me' 或某個成員 id。
 // 現在分兩層：tab 只有願望清單／行程，「看誰的清單」記在 who。
@@ -121,7 +126,23 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 </script>
 
 <template>
-  <template v-if="t">
+  <!-- 還沒載完 / 載入失敗：顯示狀態，不要當成「查無此專案」 -->
+  <template v-if="!store.ready || store.loading || store.loadError">
+    <TopBar title="" back="/" />
+    <main class="gutter"><LoadState /></main>
+  </template>
+
+  <!-- 載完了才判斷找不到。刻意不自動導頁，讓使用者自己決定要不要離開 -->
+  <template v-else-if="missing">
+    <TopBar title="" back="/" />
+    <main class="gutter mt-24 text-center">
+      <p class="text-[17px] font-semibold">找不到這個旅程</p>
+      <p class="mt-1.5 text-[14px] text-muted">可能已經被刪除，或你不是這個旅程的成員。</p>
+      <RouterLink to="/" class="btn-primary mt-6">回旅程列表</RouterLink>
+    </main>
+  </template>
+
+  <template v-else-if="t">
     <!-- 搜尋直接接管標題列，不再多佔一行 -->
     <TopBar :title="t.name" back="/">
       <template v-if="showSearch" #title>

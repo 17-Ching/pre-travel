@@ -14,6 +14,7 @@ import {
 } from "../store";
 import TopBar from "../components/TopBar.vue";
 import Avatar from "../components/Avatar.vue";
+import LoadState from "../components/LoadState.vue";
 import ThemeToggle from "../components/ThemeToggle.vue";
 
 const trips = computed(myTrips);
@@ -41,7 +42,10 @@ const counts = (id) => {
   </TopBar>
 
   <main class="gutter pb-28 pt-8">
-    <div v-if="!trips.length" class="mt-24 text-center">
+    <!-- 載入中與載入失敗要跟「真的沒有旅程」分開，三種以前長得一模一樣 -->
+    <LoadState v-if="!store.ready || store.loading || store.loadError" />
+
+    <div v-else-if="!trips.length" class="mt-24 text-center">
       <p class="text-[17px] font-semibold">還沒有旅程</p>
       <p class="mt-1.5 text-[14px] text-muted">
         建立第一個旅程，開始收藏想去的店。
@@ -127,6 +131,7 @@ const counts = (id) => {
   </main>
 
   <RouterLink
+    v-if="store.ready && !store.loading && !store.loadError"
     to="/trips/new"
     class="btn-primary fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 h-[52px] rounded-full px-5 shadow-e2"
   >
