@@ -187,7 +187,11 @@ dialog.sheet {
   margin: 0 auto;
   width: 100%;
   max-width: 720px;
-  max-height: 85dvh;
+  /* svh 不是 dvh：抽屜貼著 bottom:0，高度一變動的就是「上緣」。
+     dvh 會隨手機網址列伸縮改值，抽屜撐到上限時上緣就會跟著跳；
+     svh 取網址列展開時的高度，整段互動都不變。
+     （查另一個抖動問題時順手改的，那個抖動的元凶不是它，見下面的 sheet-content-in。） */
+  max-height: 85svh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -203,6 +207,7 @@ dialog.sheet {
 /* 抽屜開著時鎖住背景捲動。:has() 就夠，不需要 JS 記錄再還原 scroll position
    （那種做法在 iOS 上很容易跳位）。scrollbar-gutter 讓桌機切換時版面不位移。 */
 html { scrollbar-gutter: stable; }
+
 html:has(dialog.sheet[open]) { overflow: hidden; }
 
 /* 進場與退場刻意不對稱：開啟要看得出「從底下升上來」，關閉要立刻讓路。
@@ -248,10 +253,16 @@ dialog.sheet:not([open])::backdrop { opacity: 0; }
   dialog.sheet[open]::backdrop { opacity: 0; }
 }
 
-/* 內容比面板本身晚 40ms 進場，面板到位時內容才浮起來，多一層次感。
-   display 從 none 變回來時 animation 會重跑，所以每次開都有，不用 JS。 */
+/* 內容比面板本身晚 60ms 進場，面板到位時內容才浮起來，多一層次感。
+   display 從 none 變回來時 animation 會重跑，所以每次開都有，不用 JS。
+
+   只有 opacity，不要加 translate。原本是 `from { opacity: 0; translate: 0 8px }`，
+   在 iPhone 上（Safari 與 iOS Chrome，同一個 WebKit）每開一次抽屜內容就會抖一下
+   再回來 —— 對這個捲動容器做位移，WebKit 會把它提成合成層，開啟瞬間的重排就看得見。
+   桌機 Chromium 重現不出來，逐幀量也是單調的，是在真機上一個一個變因試出來的
+   （捲動鎖、max-height 都排除過）。淡入本身沒有這個問題。 */
 dialog.sheet[open] .sheet-scroll { animation: sheet-content-in 220ms cubic-bezier(0.33, 1, 0.68, 1) 60ms backwards; }
-@keyframes sheet-content-in { from { opacity: 0; translate: 0 8px; } }
+@keyframes sheet-content-in { from { opacity: 0; } }
 
 /* 換頁進場：每頁的 <main> 是新元素，掛 CSS animation 就會跑，不需要 <Transition>。
    FAB / 底部儲存列都在 <main> 外面，不受這裡的 translate 影響。 */
