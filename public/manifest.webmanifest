@@ -1,6 +1,7 @@
 {
-  "name": "行前清單",
-  "short_name": "行前清單",
+  "name": "Onway",
+  "short_name": "Onway",
+  "description": "出發前存起來，到了拿出來",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f3d9b8",
@@ -8,6 +9,8 @@
   "lang": "zh-Hant",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" },
     { "src": "/icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any maskable" }
   ]
 }

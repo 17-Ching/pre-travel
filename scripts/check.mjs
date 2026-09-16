@@ -3,7 +3,7 @@
 // 要用 `vercel dev` 和真實環境測，這裡只擋邏輯回歸。
 import assert from 'node:assert/strict'
 import { isBlocked, meta, decode, toText } from '../api/preview.js'
-import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials } from '../src/auth-rules.js'
+import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from '../src/auth-rules.js'
 import { addDays, daysBetween, coversDate, stayNights, stayDayLabel } from '../src/date-rules.js'
 
 // ── SSRF 阻擋名單（F-14）
@@ -58,6 +58,20 @@ assert.equal(validateCredentials('jean', 'secret123'), '')
 assert.match(validateCredentials('ab', 'secret123'), /帳號/)
 assert.match(validateCredentials('jean', '12345'), /密碼/)
 assert.equal(validateCredentials('jean', 'x'.repeat(MIN_PASSWORD)), '', `剛好 ${MIN_PASSWORD} 個字要過`)
+
+// 確認密碼：只有註冊會傳第三個參數，登入不受影響
+assert.equal(validateCredentials('jean', 'secret123', 'secret123'), '')
+assert.match(validateCredentials('jean', 'secret123', 'secret124'), /不一樣/)
+assert.match(validateCredentials('jean', 'secret123', ''), /不一樣/, '確認欄空白不能當作通過')
+assert.equal(validateCredentials('jean', 'secret123', undefined), '', '登入沒有確認欄，不該被擋')
+// 帳號與密碼本身不合格時，先報那個，不要先講兩次不一樣
+assert.match(validateCredentials('jean', '123', '456'), /密碼至少/)
+
+// 改密碼共用同一份密碼規則（個人資料頁）
+assert.equal(validateNewPassword('secret123', 'secret123'), '')
+assert.match(validateNewPassword('123', '123'), /密碼至少/)
+assert.match(validateNewPassword('secret123', 'secret124'), /不一樣/)
+assert.equal(validateNewPassword('secret123'), '', '沒傳確認欄時只檢查長度')
 
 // ── 日期與住宿（F-49）
 // 跨月、跨年、閏日都要對，這三個是 addDays 最常出錯的地方

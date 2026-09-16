@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { PhAirplaneTilt, PhEye, PhEyeSlash } from '@phosphor-icons/vue'
+import { PhAirplaneTilt } from '@phosphor-icons/vue'
 import { signIn, signUp } from '../store'
 import { validateCredentials } from '../auth-rules'
+import PasswordInput from '../components/PasswordInput.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
 
 const route = useRoute(), router = useRouter()
@@ -14,21 +15,26 @@ const art = ref(true)
 const mode = ref('signin') // signin | signup
 const username = ref('')
 const password = ref('')
+const confirm = ref('')
 const displayName = ref('')
-const showPw = ref(false)
 const error = ref('')
 const busy = ref(false)
 const isSignup = computed(() => mode.value === 'signup')
+// 邊打邊講，不要等按了建立帳號才說
+const mismatch = computed(() => isSignup.value && confirm.value.length > 0 && confirm.value !== password.value)
+// 開始重打就把上一次的錯誤收掉，不然改好了紅字還掛在那裡
+watch([username, password, confirm], () => { error.value = '' })
 
 function toggleMode() {
   mode.value = isSignup.value ? 'signin' : 'signup'
+  confirm.value = ''
   error.value = ''
 }
 
 // 送出鍵要 disable：這是網路請求，連點會送出好幾次註冊
 async function submit() {
   if (busy.value) return
-  error.value = validateCredentials(username.value, password.value)
+  error.value = validateCredentials(username.value, password.value, isSignup.value ? confirm.value : undefined)
   if (error.value) return
   busy.value = true
   try {
@@ -64,9 +70,10 @@ async function submit() {
     </div>
 
     <div class="relative mt-1 text-center">
-      <h1 class="text-[34px] font-bold leading-none tracking-tight">WELCOME!</h1>
-      <!-- -mr 抵銷 tracking 在最後一個字後面留下的空隙，置中才是真的置中 -->
-      <h3 class="mt-2.5 -mr-[0.28em] text-[18px] font-semibold tracking-[0.28em] text-muted">行前清單</h3>
+      <!-- 拉丁字母的字標不要撐開字距，字母之間的節奏由字體本身決定；
+           微負的 tracking 讓五個字看起來像一個詞，不是五個字母排在一起。 -->
+      <h1 class="text-[52px] font-bold leading-none tracking-[-0.015em]">Onway</h1>
+      <p class="mt-3 text-[15px] leading-relaxed text-muted">出發前存起來，到了拿出來</p>
     </div>
 
     <div class="flex-1" />
@@ -80,15 +87,15 @@ async function submit() {
 
       <div>
         <label class="label" for="password">密碼</label>
-        <div class="relative">
-          <input id="password" v-model="password" :type="showPw ? 'text' : 'password'" class="input pr-12"
-            :autocomplete="isSignup ? 'new-password' : 'current-password'" :placeholder="`至少 6 個字`" />
-          <!-- 沒有信箱就沒有忘記密碼流程，打錯一個字就進不來，所以一定要能看見自己打了什麼 -->
-          <button type="button" class="icon-btn absolute right-1 top-1/2 size-9 -translate-y-1/2 text-muted"
-            :aria-label="showPw ? '隱藏密碼' : '顯示密碼'" @click="showPw = !showPw">
-            <component :is="showPw ? PhEyeSlash : PhEye" :size="18" />
-          </button>
-        </div>
+        <PasswordInput id="password" v-model="password"
+          :autocomplete="isSignup ? 'new-password' : 'current-password'" placeholder="至少 6 個字" />
+      </div>
+
+      <!-- 沒有信箱就沒有忘記密碼流程，密碼打錯一個字帳號就廢了，所以註冊要打兩次 -->
+      <div v-if="isSignup">
+        <label class="label" for="confirm">再輸入一次密碼</label>
+        <PasswordInput id="confirm" v-model="confirm" autocomplete="new-password" placeholder="跟上面一樣" />
+        <p v-if="mismatch" class="mt-1.5 text-[12px] text-danger">兩次輸入的密碼不一樣</p>
       </div>
 
       <div v-if="isSignup">

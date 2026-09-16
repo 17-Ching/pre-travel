@@ -1,8 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { PhCamera, PhSignOut, PhArrowCounterClockwise } from '@phosphor-icons/vue'
+import { PhCamera, PhSignOut, PhArrowCounterClockwise, PhKey, PhCaretDown } from '@phosphor-icons/vue'
 import { me, updateProfile, logout, toast } from '../store'
+import { changePassword } from '../supabase'
+import PasswordInput from '../components/PasswordInput.vue'
 import TopBar from '../components/TopBar.vue'
 
 const router = useRouter()
@@ -39,6 +41,28 @@ async function save() {
   router.back()
 }
 async function out() { await logout(); router.replace('/login') }
+
+// ── 改密碼。跟上面的個人資料是兩件事，所以不共用底下那顆儲存鍵。
+// 沒有信箱就沒有忘記密碼流程（見 supabase.js），所以這裡要能看見自己打了什麼，
+// 而且新密碼一樣要打兩次。
+const pwOpen = ref(false)
+const pw = ref({ current: '', next: '', confirm: '' })
+const pwError = ref('')
+const pwBusy = ref(false)
+const pwMismatch = computed(() => pw.value.confirm.length > 0 && pw.value.confirm !== pw.value.next)
+const canChangePw = computed(() => pw.value.current && pw.value.next && !pwMismatch.value && !pwBusy.value)
+watch(pw, () => { pwError.value = '' }, { deep: true })
+
+async function submitPw() {
+  if (!canChangePw.value) return
+  pwBusy.value = true
+  const { error } = await changePassword(u.username, pw.value.current, pw.value.next)
+  pwBusy.value = false
+  if (error) { pwError.value = error; return }
+  pw.value = { current: '', next: '', confirm: '' }
+  pwOpen.value = false
+  toast('密碼已更新')
+}
 </script>
 
 <template>
@@ -69,7 +93,38 @@ async function out() { await logout(); router.replace('/login') }
     <div>
       <label class="label" for="name">顯示名稱</label>
       <input id="name" v-model="form.name" class="input" maxlength="30" placeholder="其他成員看到的名字" />
-      <p class="mt-1.5 text-[12px] text-muted">會顯示在分頁列、共同分頁的「由誰新增」與成員列表。</p>
+      <!-- v2.0 起沒有共同分頁了，這行原本還寫著它 -->
+      <p class="mt-1.5 text-[12px] text-muted">會顯示在願望清單的成員列與成員列表。</p>
+    </div>
+
+    <!-- 改密碼：預設收起來，平常不佔版面 -->
+    <div class="rounded-[14px] border border-line bg-card">
+      <button class="flex h-12 w-full items-center gap-3 px-3.5 text-left" :aria-expanded="pwOpen" @click="pwOpen = !pwOpen">
+        <PhKey :size="20" class="shrink-0 text-muted" />
+        <span class="flex-1 text-[16px]">修改密碼</span>
+        <PhCaretDown :size="18" :class="['shrink-0 text-muted transition-transform duration-150', pwOpen && 'rotate-180']" />
+      </button>
+
+      <div v-if="pwOpen" class="grid gap-3 border-t border-line p-3.5">
+        <div>
+          <label class="label" for="pw-current">目前的密碼</label>
+          <PasswordInput id="pw-current" v-model="pw.current" autocomplete="current-password" />
+        </div>
+        <div>
+          <label class="label" for="pw-next">新密碼</label>
+          <PasswordInput id="pw-next" v-model="pw.next" autocomplete="new-password" placeholder="至少 6 個字" />
+        </div>
+        <div>
+          <label class="label" for="pw-confirm">再輸入一次新密碼</label>
+          <PasswordInput id="pw-confirm" v-model="pw.confirm" autocomplete="new-password" placeholder="跟上面一樣" />
+          <p v-if="pwMismatch" class="mt-1.5 text-[12px] text-danger">兩次輸入的密碼不一樣</p>
+        </div>
+        <p v-if="pwError" role="alert" class="text-[13px] font-medium text-danger">{{ pwError }}</p>
+        <button class="btn-primary h-11 w-full" :disabled="!canChangePw" @click="submitPw">
+          {{ pwBusy ? '更新中…' : '更新密碼' }}
+        </button>
+        <p class="text-[12px] leading-relaxed text-muted">改完不用重新登入。忘記密碼沒有自助流程，要請專案擁有者到後台重設。</p>
+      </div>
     </div>
 
     <button class="btn-danger mt-2 w-full" @click="out"><PhSignOut :size="18" />登出</button>

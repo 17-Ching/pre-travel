@@ -1,9 +1,9 @@
 import { createClient } from '@supabase/supabase-js'
-import { normalizeUsername, validateCredentials, MIN_PASSWORD } from './auth-rules'
+import { normalizeUsername, validateCredentials, validateNewPassword, MIN_PASSWORD } from './auth-rules'
 
 // 驗證規則的唯一定義在 auth-rules.js（純常數、不碰 SDK，任何地方都能安全 import）。
 // 這裡轉出去，讓只認得 supabase.js 的呼叫端也拿得到同一份。
-export { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials } from './auth-rules'
+export { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from './auth-rules'
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -76,9 +76,17 @@ export async function signIn(username, password) {
   return { error: error ? readable(error) : null }
 }
 
-export async function changePassword(next) {
-  if (next.length < MIN_PASSWORD) return { error: `密碼至少 ${MIN_PASSWORD} 個字` }
+// 先用舊密碼確認一次再改。Supabase 的 updateUser 只認 session、不問舊密碼，
+// 這一關是自己加的：沒有信箱就沒有救援管道，別人拿到沒鎖的手機改掉密碼，
+// 本人就永久進不來了（只能請專案擁有者到後台重設）。
+// Supabase 的 reauthenticate() 是寄 nonce 到信箱，這裡用不了，所以用登入當驗證。
+export async function changePassword(username, current, next) {
+  const bad = validateNewPassword(next)
+  if (bad) return { error: bad }
+  if (current === next) return { error: '新密碼和目前的密碼一樣' }
   if (!isConfigured) return { error: NOT_CONFIGURED }
+  const { error: wrong } = await sb().auth.signInWithPassword({ email: emailFor(username), password: current })
+  if (wrong) return { error: '目前的密碼不對' }
   const { error } = await sb().auth.updateUser({ password: next })
   return { error: error ? readable(error) : null }
 }

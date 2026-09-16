@@ -11,8 +11,16 @@ export const MIN_PASSWORD = 6
 // 帳號不分大小寫：Jean 和 jean 是同一個帳號
 export const normalizeUsername = u => u.trim().toLowerCase()
 
-export function validateCredentials(username, password) {
-  if (!USERNAME_RE.test(username.trim())) return '帳號限 3 到 20 個字，只能用英數字和底線'
+// 設定新密碼的規則。註冊與改密碼共用，confirm 有傳才檢查兩次一不一樣。
+// 沒有信箱就沒有自助的忘記密碼流程，打錯一個字等於這個帳號當場報廢，
+// 所以「要打兩次」這一關在兩個地方都要有。
+export function validateNewPassword(password, confirm) {
   if (password.length < MIN_PASSWORD) return `密碼至少 ${MIN_PASSWORD} 個字`
+  if (confirm !== undefined && confirm !== password) return '兩次輸入的密碼不一樣'
   return ''
+}
+
+export function validateCredentials(username, password, confirm) {
+  if (!USERNAME_RE.test(username.trim())) return '帳號限 3 到 20 個字，只能用英數字和底線'
+  return validateNewPassword(password, confirm)
 }

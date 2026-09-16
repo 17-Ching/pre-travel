@@ -12,7 +12,7 @@ const TIMEOUT = 5000
 const MAX_PAGE = 2 * 1024 * 1024
 const MAX_IMAGE = 5 * 1024 * 1024
 const MAX_HOPS = 5
-const UA = 'Mozilla/5.0 (compatible; PreTravelBot/1.0; +link preview)'
+const UA = 'Mozilla/5.0 (compatible; OnwayBot/1.0; +link preview)'
 
 function isPrivateV4(ip) {
   const p = ip.split('.').map(Number)
