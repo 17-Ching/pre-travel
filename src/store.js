@@ -68,6 +68,7 @@ export const store = reactive({
   me: null,          // 目前登入者的 id
   ready: false,      // 第一次載入完成前，頁面顯示載入中
   loading: false,
+  loadError: '',     // 載入失敗的訊息。空字串 = 沒失敗，畫面要靠它區分「載入失敗」與「真的沒資料」
   offline: false,
   pending: [],
   toast: null,
@@ -132,15 +133,34 @@ async function attachImageUrls() {
   for (const i of store.items) for (const im of i.images) im.url = signed.get(im.path) || ''
 }
 
-export async function refresh() {
+// 剛登入或剛註冊時，Supabase 簽出來的 token 有一兩秒會比 PostgREST 節點的時鐘
+// 「還沒到」，查詢就被回 401 JWT issued at future。這是暫時的，等一下就好。
+// 沒有重試的話那一次失敗會讓整個 app 停在空的狀態，使用者只看到「還沒有旅程」，
+// 得自己重整才會好 —— 實際發生過，而且同一個失敗還會連帶讓剛用邀請連結加入的人
+// 卡在一個點不動的畫面（Trip 找不到專案 → 在 setup 裡跳轉 → 跟進行中的導航打架）。
+const TRANSIENT = /issued at future|jwt|expired|fetch|network|timeout|50[234]/i
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+export async function refresh({ retries = 3 } = {}) {
   if (!store.me) return
   store.loading = true
+  store.loadError = ''
   try {
-    Object.assign(store, await api.loadAll())
-    await attachImageUrls()
-    store.syncedAt = now()
+    for (let attempt = 0; ; attempt++) {
+      try {
+        Object.assign(store, await api.loadAll())
+        await attachImageUrls()
+        store.syncedAt = now()
+        return
+      } catch (err) {
+        if (attempt >= retries || !TRANSIENT.test(err.message ?? '')) throw err
+        await sleep(300 * 2 ** attempt)   // 0.3s → 0.6s → 1.2s，足夠蓋過時鐘偏差
+      }
+    }
   } catch (err) {
-    toast(err.message)
+    // 留給畫面判斷：載入失敗和「真的沒有資料」不一樣，不能都顯示空狀態
+    store.loadError = err.message || '載入資料失敗'
+    toast(store.loadError)
   } finally {
     store.loading = false
     store.ready = true
@@ -179,6 +199,7 @@ export async function logout() {
   await authSignOut()
   store.me = null
   store.ready = true
+  store.loadError = ''
   Object.assign(store, empty())
 }
 
