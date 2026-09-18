@@ -1,9 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhX, PhLink, PhImage, PhPlus } from '@phosphor-icons/vue'
 import { store, item as getItem, regionsOf, myTags, ensureTag, addRegion, saveItem, fetchPreview, tagColor, toast,
-  uploadItemImage, uploadImageFromDataUrl, MAX_LINKS, newLink, sourceLabel, thumbOf } from '../store'
+  uploadItemImage, uploadImageFromDataUrl, MAX_LINKS, newLink, sourceLabel, thumbOf, sweepImages } from '../store'
+import { imagePaths } from '../image-rules'
 import { useLinkPreview } from '../link-preview'
 import TopBar from '../components/TopBar.vue'
 
@@ -43,7 +44,7 @@ async function onUrl(l) {
   if (!f.value.title.trim()) f.value.title = d.title
   // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）
   if (d.image && !f.value.images.length) {
-    try { f.value.images.push(await uploadImageFromDataUrl(tripId, d.image)) } catch { /* 有標題就夠用了 */ }
+    try { f.value.images.push(track(await uploadImageFromDataUrl(tripId, d.image))) } catch { /* 有標題就夠用了 */ }
   }
 }
 // paste 事件當下 input 的值還是舊的，要等瀏覽器寫進去才讀得到
@@ -53,7 +54,18 @@ function addDesc(l) {
   if (d) f.value.note = (f.value.note ? f.value.note + '\n' : '') + d
 }
 
-// F-27 圖片：前端壓縮後直接上傳 bucket，資料庫只存路徑
+// F-27 圖片：前端壓縮後直接上傳 bucket，資料庫只存路徑。
+//
+// 選了圖就立刻上傳（不是等按儲存），為的是馬上看得到縮圖、而且儲存能維持瞬間完成 ——
+// 五張照片改成存檔時才上傳的話，按下儲存要等好幾秒還沒有進度可看。
+// 代價是「上傳了但最後沒用到」的檔案：表單裡刪掉、或整個放棄不存，檔案都已經在 bucket 裡。
+// 所以這裡記下這個表單上傳過的每一個 path，離開頁面時掃一次。
+// sweepImages 會先確認沒有任何活著的項目在引用（存檔成功的圖這時已經在 store 裡），
+// 所以「存起來的」不會被誤刪，只有真的沒人要的才清掉。
+const uploaded = []
+const track = im => { uploaded.push(...imagePaths([im])); return im }
+onBeforeUnmount(() => { if (uploaded.length) sweepImages(uploaded) })
+
 const busy = ref(false)
 async function addFiles(e) {
   const files = [...e.target.files]
@@ -62,7 +74,7 @@ async function addFiles(e) {
   for (const file of files) {
     if (f.value.images.length >= 5) { toast('每個項目最多 5 張圖片'); break }
     if (file.size > 20 * 1024 * 1024) { toast(`${file.name} 超過 20 MB`); continue }
-    try { f.value.images.push(await uploadItemImage(tripId, file)) } catch (err) { toast(err.message || `${file.name} 讀不到`) }
+    try { f.value.images.push(track(await uploadItemImage(tripId, file))) } catch (err) { toast(err.message || `${file.name} 讀不到`) }
   }
   busy.value = false
 }
@@ -75,7 +87,7 @@ async function addImageUrl() {
   try {
     const d = await fetchPreview(url)
     if (!d.image) throw new Error('這個網址沒有圖片')
-    f.value.images.push(await uploadImageFromDataUrl(tripId, d.image))
+    f.value.images.push(track(await uploadImageFromDataUrl(tripId, d.image)))
   } catch (err) { toast(err.message === 'blocked' ? '這個網址不允許存取' : '無法取得圖片') }
   busy.value = false
 }

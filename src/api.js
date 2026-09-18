@@ -146,6 +146,19 @@ export async function uploadImage(tripId, blob) {
   return path
 }
 
+// 刪檔失敗不往上丟：呼叫端是在資料列已經刪掉之後才走到這裡，這時候再跳錯只是
+// 給使用者一個他處理不了的訊息。檔案留著就是孤兒檔，浪費空間但不影響正確性。
+//
+// 注意 storage 的 remove 跟這個檔案其他寫入不一樣：它把失敗放在回傳的 error 裡，
+// 不會 throw（同 signPaths、uploadImage 的寫法）。所以光靠 try/catch 是接不到的，
+// 要明確忽略 error 才是真的「吞掉」。try/catch 留著是為了 sb() 本身沒設定會 throw。
+export async function removeImages(paths) {
+  try {
+    const { error } = await sb().storage.from('media').remove(paths)
+    if (error) console.warn('清理圖片失敗，留成孤兒檔：', error.message)
+  } catch { /* 沒設定後端連線，同樣留成孤兒檔 */ }
+}
+
 // 頭像放公開 bucket，免簽名，換頭像時直接覆蓋同一個路徑
 export async function uploadAvatar(userId, blob) {
   const path = `${userId}/avatar.jpg`

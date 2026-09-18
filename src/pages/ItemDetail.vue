@@ -20,6 +20,33 @@ const tags = computed(() => it.value.tagIds.map(id => store.tags.find(g => g.id 
 const links = computed(() => it.value.links ?? [])
 const copying = ref(false)
 
+// 圖片橫滑：手機用手指滑，滑鼠沒有對應動作 ——「.rail」把捲軸藏起來了，
+// 桌機既拖不動也看不出來還有第二張。這裡自己接滑鼠拖曳。
+//
+// 只認滑鼠（pointerType === 'mouse'）：觸控本身就有慣性與回彈，接手反而更難用。
+// 拖曳期間要把 scroll-snap 關掉，不然每移動一點就被吸回去；放開才還原，
+// 這樣手一鬆會自己對齊到最近那張。
+const rail = ref()
+const dragging = ref(false)
+let startX = 0, startLeft = 0
+
+function dragStart(e) {
+  if (e.pointerType !== 'mouse' || e.button !== 0) return
+  dragging.value = true
+  startX = e.clientX
+  startLeft = rail.value.scrollLeft
+  rail.value.setPointerCapture(e.pointerId)
+}
+function dragMove(e) {
+  if (!dragging.value) return
+  rail.value.scrollLeft = startLeft - (e.clientX - startX)
+}
+function dragEnd(e) {
+  if (!dragging.value) return
+  dragging.value = false
+  rail.value.releasePointerCapture?.(e.pointerId)
+}
+
 // F-30: plain text with URLs turned into links. Escape first, then linkify.
 const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
 const linkify = s => esc(s).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener" class="break-all text-accent underline">${u}</a>`)
@@ -46,8 +73,13 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
     </TopBar>
 
     <main class="pb-12">
-      <div v-if="images.length" class="rail flex snap-x snap-mandatory gap-2">
-        <img v-for="im in images" :key="im.url" :src="im.url" alt="" :class="['aspect-[4/3] shrink-0 snap-center rounded-xl bg-line object-cover', images.length > 1 ? 'w-[85%]' : 'w-full']" />
+      <!-- 滑鼠可以直接拖。dragstart.prevent 是必要的：不擋的話拖 <img> 會變成
+           瀏覽器原生的拖曳圖片，捲動就中斷了 -->
+      <div v-if="images.length" ref="rail"
+        :class="['rail flex snap-x snap-mandatory gap-2', images.length > 1 && (dragging ? 'cursor-grabbing' : 'cursor-grab')]"
+        :style="dragging ? 'scroll-snap-type: none; user-select: none' : ''"
+        @pointerdown="dragStart" @pointermove="dragMove" @pointerup="dragEnd" @pointercancel="dragEnd" @dragstart.prevent>
+        <img v-for="im in images" :key="im.url" :src="im.url" alt="" draggable="false" :class="['aspect-[4/3] shrink-0 snap-center rounded-xl bg-line object-cover', images.length > 1 ? 'w-[85%]' : 'w-full']" />
       </div>
 
       <div class="px-4 pt-4">

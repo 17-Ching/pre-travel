@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { isBlocked, meta, decode, toText } from '../api/preview.js'
 import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from '../src/auth-rules.js'
 import { addDays, daysBetween, coversDate, stayNights, stayDayLabel } from '../src/date-rules.js'
+import { imagePaths, unusedPaths } from '../src/image-rules.js'
 
 // ── SSRF 阻擋名單（F-14）
 for (const ip of [
@@ -97,5 +98,56 @@ assert.equal(stayDayLabel(stay, '2026-09-16'), '退房')
 
 // 同日進出仍算 1 晚，不要顯示 0 晚
 assert.equal(stayNights({ date: '2026-09-13', endDate: '2026-09-13' }), 1)
+
+// ── 刪項目時清 bucket。刪錯是永久資料遺失，所以每個條件都要擋住。
+const img = (n) => ({ path: `t/${n}.jpg`, thumbPath: `t/${n}-s.jpg`, w: 1600, h: 1200 })
+assert.deepEqual(imagePaths([img('a'), img('b')]),
+  ['t/a.jpg', 't/a-s.jpg', 't/b.jpg', 't/b-s.jpg'], '原圖和縮圖都要收進來')
+assert.deepEqual(imagePaths(undefined), [], '舊資料可能沒有 images')
+assert.deepEqual(imagePaths([{ path: 't/old.jpg' }]), ['t/old.jpg'], '加縮圖之前的資料沒有 thumbPath')
+
+// 沒有別人引用 → 兩個 path 都該刪
+assert.deepEqual(unusedPaths(imagePaths([img('a')]), [], []), ['t/a.jpg', 't/a-s.jpg'])
+
+// F-12：複製品共用同一個 path，原項目被刪也絕對不能刪檔
+assert.deepEqual(unusedPaths(imagePaths([img('a')]), [{ images: [img('a')] }], []), [],
+  '還有項目引用同一個 path 時一張都不能刪')
+
+// 一半被引用的情況：只刪沒人要的那個（縮圖是後來才補的，會出現這種形狀）
+assert.deepEqual(
+  unusedPaths(['t/a.jpg', 't/a-s.jpg'], [{ images: [{ path: 't/a.jpg' }] }], []),
+  ['t/a-s.jpg'], '原圖還被引用，只能刪縮圖')
+
+// 專案封面也算引用（軟刪除的專案還留在 store.trips，封面因此受保護）
+assert.deepEqual(unusedPaths(['t/cover.jpg'], [], ['t/cover.jpg']), [])
+assert.deepEqual(unusedPaths(['t/cover.jpg'], [], [null, undefined]), ['t/cover.jpg'],
+  '沒設封面的專案 coverPath 是 null，不該把別人的檔案保下來')
+
+// 同一個 path 出現兩次只回一次，不要對 storage 送重複的刪除
+assert.deepEqual(unusedPaths(['t/a.jpg', 't/a.jpg'], [], []), ['t/a.jpg'])
+
+// 空值不該變成刪除目標 —— 送空字串給 storage.remove 是未定義行為
+assert.deepEqual(unusedPaths([null, undefined, ''], [], []), [])
+
+// 編輯分支：拿掉一張圖，但那張圖正被別人的複製品共用 → 一張都不能刪。
+// 這條跟上面的 F-12 是同一個規則，但資料形狀不同（多張圖、候選只有一部分沒人要），
+// 而 saveItem 的編輯分支就是餵這種形狀進來。
+const beforeEdit = [img('x'), img('y')]
+assert.deepEqual(
+  unusedPaths(imagePaths(beforeEdit), [{ images: [img('y')] }, { images: [img('x')] }], []),
+  [], '留下的那張和別人共用的那張都還活著')
+// 同一次編輯，但沒有人共用被拿掉的那張 → 只清那張的原圖與縮圖
+assert.deepEqual(
+  unusedPaths(imagePaths(beforeEdit), [{ images: [img('y')] }], []),
+  ['t/x.jpg', 't/x-s.jpg'])
+
+// 表單離開時的清理：選了圖就立刻上傳，所以「上傳了但沒存到」的檔案要收掉。
+// 判斷一律是「store 裡還有沒有人引用」，存好的圖這時已經在 store 裡，不會被誤刪。
+const uploaded = [...imagePaths([img('1')]), ...imagePaths([img('2')])]
+assert.deepEqual(unusedPaths(uploaded, [{ images: [img('1')] }], []),
+  ['t/2.jpg', 't/2-s.jpg'], '存檔前在表單裡刪掉的那張才要清')
+assert.deepEqual(unusedPaths(uploaded, [], []), uploaded, '填一半離開，兩張都沒存到就都要清')
+assert.deepEqual(unusedPaths(uploaded, [{ images: [img('1'), img('2')] }], []), [],
+  '兩張都存起來了就一張都不能碰')
 
 console.log('檢查通過')

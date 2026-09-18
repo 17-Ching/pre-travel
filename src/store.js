@@ -5,6 +5,7 @@
 import { reactive, watch } from 'vue'
 import * as api from './api'
 import { WEEK, parseDate, todayISO, addDays, coversDate } from './date-rules'
+import { imagePaths, unusedPaths } from './image-rules'
 import { sb, isConfigured, signIn as authSignIn, signUp as authSignUp, signOut as authSignOut } from './supabase'
 
 const uid = () => crypto.randomUUID()
@@ -267,6 +268,19 @@ export async function uploadItemImage(tripId, file, max = MAX.item) {
   }
 }
 
+// 刪掉沒有人再引用的 bucket 檔案。共用判斷在 image-rules.js（F-12 的複製品會
+// 共用同一個 path），這裡只負責把「還活著的東西」餵進去。
+//
+// 呼叫時機一定要在資料列真的刪掉之後：順序反過來而寫入失敗的話，rollback 會把
+// 項目救回畫面，但檔案已經沒了，使用者看到的是破圖。孤兒檔可以之後再掃，破圖回不來。
+//
+// 判斷依據是本地 store，所以前提是該專案的項目都已經載進來了（loadAll 會載齊
+// 專案內所有成員的項目，包含已離開成員留下的）。
+export function sweepImages(candidates) {
+  const gone = unusedPaths(candidates, store.items, store.trips.map(t => t.coverPath))
+  if (gone.length) api.removeImages(gone)
+}
+
 // F-14 / F-28：連結預覽圖與貼上的圖片網址都要轉存成自己的副本，
 // 因為 IG 和 Google 的圖片網址會過期，而且離線時要有本地檔。
 // 後端已經把圖抓成 data URL 送回來（瀏覽器直接抓跨網域圖片會污染 canvas）。
@@ -429,7 +443,10 @@ export function saveItem(data) {
     const before = JSON.parse(JSON.stringify(existing))
     Object.assign(existing, data, { updatedAt: now(), updatedBy: store.me })
     touch(data.tripId)
-    push(() => api.updateItem(existing, before.tagIds), () => Object.assign(existing, before))
+    // 編輯時移掉的圖片也會變孤兒檔。整包舊 path 都丟去掃就好，還留著的自然算「活著」，
+    // 不用在這裡比對哪幾張被拿掉。
+    push(() => api.updateItem(existing, before.tagIds).then(() => sweepImages(imagePaths(before.images))),
+      () => Object.assign(existing, before))
     return existing
   }
   const it = reactive({
@@ -461,7 +478,7 @@ export function deleteItem(id) {
     e.title = e.title?.trim() || removed.title
     e.detachedAt = now()
   })
-  push(() => api.deleteItem(id), () => {
+  push(() => api.deleteItem(id).then(() => sweepImages(imagePaths(removed.images))), () => {
     store.items.splice(i, 0, removed)
     snapshot.forEach(s => Object.assign(s.e, { itemId: s.itemId, title: s.title, detachedAt: s.detachedAt }))
   })
