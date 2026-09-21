@@ -336,6 +336,9 @@ export async function createTrip({ name, country, start, end, coverFile }) {
 export async function updateTrip(id, { name, country, start, end, coverFile, cover }) {
   const t = trip(id)
   if (!t) return
+  // 換封面或清掉封面時，舊的那張就沒人引用了。跟項目圖片同一個道理，
+  // 一樣等資料列存好才掃，失敗的話寧可留孤兒檔也不要讓畫面變破圖。
+  const oldCover = t.coverPath
   try {
     let coverPath = t.coverPath
     if (coverFile) {
@@ -346,6 +349,7 @@ export async function updateTrip(id, { name, country, start, end, coverFile, cov
     }
     const saved = await api.updateTrip(id, { name, country, start, end, coverPath })
     Object.assign(t, saved)
+    if (oldCover && oldCover !== t.coverPath) sweepImages([oldCover])
     await attachImageUrls()
   } catch (err) {
     toast(err.message)
