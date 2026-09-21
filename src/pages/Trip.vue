@@ -41,7 +41,9 @@ const tabOwner = computed(() => (p.who === 'me' ? store.me : p.who))
 const editable = computed(() => tabOwner.value === store.me)
 const regions = computed(() => regionsOf(tripId))
 const scoped = computed(() => store.items.filter(i => i.tripId === tripId && i.ownerUserId === tabOwner.value && i.type === p.type))
-// F-25: tags on this tab merged by name
+// 篩選用「標籤名稱」不是 id：同一個名字在每個成員名下是各自獨立的一筆（F-22），
+// 看別人的清單時要能照他的標籤篩，比對 id 會是空的。
+// （原本掛在 F-25 底下，那條隨共同分頁在 v2.0 刪掉了，但比對名稱這件事留著才對。）
 const tagNames = computed(() => [...new Set(scoped.value.flatMap(i => i.tagIds.map(id => store.tags.find(g => g.id === id)?.name)).filter(Boolean))])
 
 const STATUS = { shopping: [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買到']], place: [['unvisited', '未去'], ['visited', '已去過']] }

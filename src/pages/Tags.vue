@@ -24,7 +24,7 @@ function remove(g) {
       <input v-model="name" class="input" maxlength="20" placeholder="新標籤，例：拉麵" />
       <button class="btn-primary shrink-0" :disabled="!name.trim()">新增</button>
     </form>
-    <p class="mt-2 text-[12px] text-muted">標籤只有你看得到，只在這個專案內使用。{{ tags.length }} / 50</p>
+    <p class="mt-2 text-[12px] text-muted">同行的人看得到你的標籤、也能用它篩選你的清單，但只有你能新增與修改。只在這個專案內使用。{{ tags.length }} / 50</p>
 
     <p v-if="!tags.length" class="mt-12 text-center text-muted">還沒有標籤。在新增項目時輸入也會自動建立。</p>
     <ul v-else class="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line bg-card">
