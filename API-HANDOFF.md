@@ -95,11 +95,12 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 | 他人分頁唯讀（F-11） | 上面兩條的反面，已有測試覆蓋 | rls-test.sql |
 | 編輯／刪除專案限 owner | `trips_update` + `delete_trip` RPC 內的檢查 | 同上 |
 | 只能貼自己的標籤（§4.2） | `item_tags_insert` 同時檢查項目可寫與標籤屬於自己 | 同上 |
+| 標籤成員可讀、本人才可寫（F-22） | `tags_select`（成員）+ `tags_write`（本人） | 同上 |
 | 撤銷邀請：owner 全部，成員限自己產生的 | `invites_update` | 同上 |
 | 擁有者不能自行離開 | `owner_cannot_leave` CHECK 約束，不是 policy | 同上 |
 | **行程**：任何 active 成員都能增刪改 | `itinerary_*` 四條、`trip_days_all` | 同上 |
 
-共 31 條 policy、4 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite`）、6 個觸發器。
+共 32 條 policy、4 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite`）、6 個觸發器。
 
 行程刻意**沒有** `owner_user_id`，不設個人隔離。PRD §3.2 的理由：行程的價值在於大家看同一份，個人的想法放在自己的清單分頁。
 
@@ -107,7 +108,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 54 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤只有自己看得到、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 57 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -199,7 +200,8 @@ node scripts/check.mjs
 | F-33 離線可寫 | **半套**。`store.offline` 還是 Trip 頁選單裡的手動開關，`store.pending` 只存在記憶體，重整就消失。真實版要改用 `navigator.onLine` 加上 `online`/`offline` 事件，佇列落地 IndexedDB。佇列已經能裝兩種東西（清單項目的狀態、行程項目的完成），用 `kind` 區分 |
 | F-45 行程離線 | **未做**，依賴上面三條，照使用者決定整批往後 |
 | F-34 衝突處理 | 未做。目前誰後寫誰贏，但沒有比對 `updated_at` |
-| 刪除項目時清掉 bucket 檔案 | **已做**（刪項目、編輯時移掉圖片兩條路徑）。判斷在 [`src/image-rules.js`](src/image-rules.js)：只刪沒有任何項目或專案封面還在引用的 path，F-12 的複製品共用同一個 path 所以擋在這裡。刪檔一律在資料列刪成功之後才做，反過來會在寫入失敗回捲後留下破圖。**還沒做**：專案封面換圖後的舊檔、以及既有的孤兒檔沒有回頭清（需要一支對照 `storage.objects` 與 `items.images` 的批次） |
+| 刪除項目時清掉 bucket 檔案 | **已做**。四條路徑都掃：刪項目、編輯時移掉圖片、離開表單時丟掉沒存的圖、換或清掉專案封面。判斷在 [`src/image-rules.js`](src/image-rules.js)：只刪沒有任何項目或專案封面還在引用的 path，F-12 的複製品共用同一個 path 所以擋在這裡。刪檔一律在資料列存好之後才做，反過來會在寫入失敗回捲後留下破圖 |
+| 既有孤兒檔 | **已做**，但要手動跑：`npm run sweep` 預演、`npm run sweep -- --delete` 真的刪（[`scripts/sweep-orphans.mjs`](scripts/sweep-orphans.mjs)）。需要 service role 金鑰，只在本機跑。24 小時內上傳的檔案一律跳過，避免跟正開著表單的人搶。沒有排程，清理上線後孤兒檔不會再累積，這支是掃歷史殘留的 |
 
 ### 7.1 已經端對端實測過的
 
@@ -239,6 +241,8 @@ api/preview.js        連結預覽 / 圖片轉存（Vercel Function，唯一的�
 supabase/
   schema.sql          資料表、RLS、RPC、觸發器、Storage。可重複執行
   migrate-v2.sql      v1 → v2.0 的一次性遷移。會刪資料，跟 schema.sql 刻意分開
+  migrate-tags-rls.sql  F-22 標籤讀取放寬到同專案成員。只動 tags 的 policy，
+                        可重複執行。正式庫跑這支就好，不要為了這個重跑 schema.sql
   rls-test.sql        權限驗證，54 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/

@@ -433,8 +433,12 @@ create policy invites_update on public.invites for update
 create policy regions_all on public.regions for all
   using (public.is_trip_member(trip_id)) with check (public.is_trip_member(trip_id));
 
--- tags：只有自己的，別人的標籤連看都看不到（F-22）
-create policy tags_all on public.tags for all
+-- tags：同專案成員都看得到，但只有本人能增刪改（F-22）。
+-- 讀得放寬是因為看別人的清單時要能照標籤篩選，看不到名字就篩不了，討論行程會卡住。
+-- 寫入維持本人限定：標籤是「使用者 × 專案」的，別人不能動你的分類。
+create policy tags_select on public.tags for select
+  using (public.is_trip_member(trip_id));
+create policy tags_write on public.tags for all
   using (user_id = auth.uid() and public.is_trip_member(trip_id))
   with check (user_id = auth.uid() and public.is_trip_member(trip_id));
 

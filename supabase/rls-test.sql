@@ -130,6 +130,8 @@ do $$ begin
   perform ok((select count(*) from trips) = 0,  '非成員看不到專案');
   perform ok((select count(*) from items) = 0,  '非成員看不到任何項目');
   perform ok((select count(*) from regions) = 0, '非成員看不到地區');
+  -- tags_select 放寬到「同專案成員」之後，非成員這條邊界要有人守著
+  perform ok((select count(*) from tags) = 0, '非成員看不到標籤');
 end $$;
 
 select denied(
@@ -180,17 +182,26 @@ do $$ begin
     '觸發器蓋上真正的修改者，不靠前端自己填');
 end $$;
 
--- ── 標籤只有自己看得到（F-22）────────────────────────────────
+-- ── 標籤：成員都看得到，只有本人能改（F-22）──────────────────
 insert into tags (trip_id, user_id, name) values (:'trip_id', :'ruby', '拉麵');
 do $$ begin
-  perform ok((select count(*) from tags) = 1, 'Ruby 只看得到自己的標籤');
-  perform ok((select count(*) from tags where name = '拉麵') = 1,
+  perform ok((select count(*) from tags) = 2,
+    'Ruby 看得到同專案成員的標籤（看別人清單時要能照標籤篩選）');
+  perform ok((select count(*) from tags where name = '拉麵') = 2,
     '同名標籤各自獨立，不會互相覆蓋');
 end $$;
 
 select denied(
   format('insert into tags (trip_id, user_id, name) values (%L, %L, %L)', :'trip_id', :'jean', '冒名標籤'),
   '不能建立掛在別人名下的標籤');
+
+select id as jean_tag from tags where user_id = :'jean' \gset
+select denied(
+  format('update tags set name = %L where id = %L', '被改名', :'jean_tag'),
+  '看得到別人的標籤，但不能改名');
+select denied(
+  format('delete from tags where id = %L', :'jean_tag'),
+  '看得到別人的標籤，但不能刪除');
 
 -- 只能貼自己的標籤（§4.2）
 select id as ruby_tag from tags where user_id = :'ruby' \gset
