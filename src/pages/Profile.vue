@@ -1,11 +1,19 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { PhCamera, PhSignOut, PhArrowCounterClockwise, PhKey, PhCaretDown } from '@phosphor-icons/vue'
-import { me, updateProfile, logout, toast, imageOk, imageBroken } from '../store'
+import { PhCamera, PhSignOut, PhArrowCounterClockwise, PhKey, PhCaretDown, PhDeviceMobile, PhExport, PhPlusSquare, PhCheck } from '@phosphor-icons/vue'
+import { me, updateProfile, logout, toast, imageOk, imageBroken, install, isIOS, promptInstall } from '../store'
 import { changePassword } from '../supabase'
 import PasswordInput from '../components/PasswordInput.vue'
 import TopBar from '../components/TopBar.vue'
+import Sheet from '../components/Sheet.vue'
+
+const version = __APP_VERSION__
+const year = new Date().getFullYear()
+// iOS 叫不出安裝視窗，只能開一張說明；其他瀏覽器有事件才顯示按鈕
+const iosHelp = ref(false)
+const canInstall = computed(() => !install.done && (install.event || isIOS))
+const doInstall = () => (isIOS ? (iosHelp.value = true) : promptInstall())
 
 const router = useRouter()
 const u = me()
@@ -127,8 +135,43 @@ async function submitPw() {
       </div>
     </div>
 
+    <!-- 加入主畫面。沒接到 beforeinstallprompt 又不是 iOS 就整塊不出現：
+         那代表已經裝了、條件不符、或瀏覽器不支援，給一顆按不動的按鈕更糟 -->
+    <button v-if="canInstall" class="btn-ghost w-full" @click="doInstall">
+      <PhDeviceMobile :size="18" />加入主畫面
+    </button>
+    <p v-else-if="install.done" class="flex items-center justify-center gap-1.5 text-[13px] text-muted">
+      <PhCheck :size="15" />已經加到主畫面了
+    </p>
+
     <button class="btn-danger mt-2 w-full" @click="out"><PhSignOut :size="18" />登出</button>
+
+    <!-- 版本與版權。使用者回報問題時會講的就是這個版本號 -->
+    <footer class="pb-2 text-center text-[12px] leading-relaxed text-muted">
+      <p>Onway v{{ version }}</p>
+      <p>© {{ year }} 17 Ching</p>
+    </footer>
   </main>
+
+  <!-- iOS 沒有安裝 API，只能把 Safari 的步驟畫出來 -->
+  <Sheet v-model:open="iosHelp" title="加入主畫面">
+    <div class="px-3 pb-3">
+      <p class="mb-4 text-[14px] leading-relaxed">iPhone 和 iPad 要從 Safari 自己加，三個步驟：</p>
+      <ol class="grid gap-3.5">
+        <li v-for="(s, i) in [
+          { icon: PhExport, text: '點畫面下方工具列正中間的「分享」' },
+          { icon: PhPlusSquare, text: '往下捲，選「加入主畫面」' },
+          { icon: PhCheck, text: '右上角按「新增」' },
+        ]" :key="i" class="flex items-center gap-3">
+          <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-tint-soft text-tint">
+            <component :is="s.icon" :size="19" />
+          </span>
+          <span class="text-[15px] leading-snug">{{ s.text }}</span>
+        </li>
+      </ol>
+      <p class="mt-4 text-[12px] leading-relaxed text-muted">用 Chrome 或其他 App 內建瀏覽器開的話沒有這個選項，要先用 Safari 開。</p>
+    </div>
+  </Sheet>
 
   <div class="fixed inset-x-0 bottom-0 z-30 mx-auto max-w-[720px] border-t border-line bg-surface px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
     <button class="btn-primary h-12 w-full" :disabled="!canSave || busy" @click="save">儲存</button>

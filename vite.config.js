@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import tailwindcss from '@tailwindcss/vite'
+
+// 畫面上的版本號跟著 package.json 走，不要在元件裡再寫死一份 —— 兩份遲早會對不上，
+// 而且對不上的時候沒人會發現（畫面顯示的那個才是使用者回報問題時會講的數字）。
+const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 
 // npm run dev 也要能測 /api/preview（F-14）。
 // Vite 不會跑 api 資料夾，沒有這段的話 /api/preview 會落到 SPA fallback，
@@ -27,6 +32,7 @@ const apiDev = () => ({
 
 export default defineConfig({
   plugins: [vue(), tailwindcss(), apiDev()],
+  define: { __APP_VERSION__: JSON.stringify(version) },
   // host: true → 綁 0.0.0.0，同一個 Wi-Fi 的手機可以用電腦的區網 IP 開。
   server: { host: true, port: Number(process.env.PORT) || 5173 },
 })

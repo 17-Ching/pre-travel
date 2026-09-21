@@ -91,6 +91,35 @@ export const store = reactive({
 })
 watch(() => store.prefs, p => localStorage.setItem('pretravel-prefs', JSON.stringify(p)), { deep: true })
 
+// ---- 加入主畫面（PWA 安裝）
+// Chrome / Edge 在符合安裝條件時丟 beforeinstallprompt。它在載入後不久就觸發一次，
+// 所以要在 app 啟動時接住 —— 等使用者走到個人資料頁才掛 listener 早就錯過了。
+// 事件物件本身就是「瀏覽器願意裝」的憑證，沒接到就不該顯示按鈕（可能是已經裝了、
+// 條件不符、或這個瀏覽器根本不支援），不要自己猜。
+export const install = reactive({ event: null, done: false })
+
+// iOS Safari 沒有 beforeinstallprompt，也沒有任何可以叫出安裝的 API，只能教使用者
+// 自己從分享選單加。iPadOS 的 UA 會自稱 Macintosh，所以要再看有沒有觸控點才分得出來。
+export const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+
+// 已經是從主畫面開的就不用再問。標準是 display-mode，navigator.standalone 是 iOS 專有的
+install.done = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true
+addEventListener('beforeinstallprompt', e => {
+  e.preventDefault()   // 不擋的話 Chrome 會自己跳一個迷你提示，我們要自己決定何時問
+  install.event = e
+})
+addEventListener('appinstalled', () => { install.event = null; install.done = true })
+
+export async function promptInstall() {
+  const e = install.event
+  if (!e) return
+  // 一個 beforeinstallprompt 只能 prompt() 一次，用過就作廢；先清掉，按鈕才不會
+  // 停在那裡讓人按第二次卻沒反應。使用者按了取消的話，要等瀏覽器下次再丟事件。
+  install.event = null
+  await e.prompt()
+}
+
 // ---- toast
 let toastTimer
 export function toast(text, action) {
