@@ -49,6 +49,12 @@ export function sourceLabel(url) {
 // 不能讓它變破圖。三個地方共用這一支，免得之後新增一個縮圖位置又忘了退路。
 export const thumbOf = im => im?.thumbUrl || im?.url || ''
 
+// 圖片載不到時頂上的插畫。打包在 public/ 才有意義 —— 備援圖要是得走同一條壞掉的
+// 網路才拿得到，等於沒有備援。key 直接對上項目的 type，畫面不用再寫一次三元判斷。
+// 這幾張本身也可能沒被放進去（換人 deploy、檔名打錯），所以用它的地方還要再退
+// 一階到 Phosphor 圖示，跟 Login.vue 的插畫同一套做法。
+export const ART = { place: '/location.png', shopping: '/shop.png', trip: '/trip.png' }
+
 export const MAX_LINKS = 5
 export const newLink = () => ({ id: uid(), url: '', title: '' })
 export const linkLabel = l => l.title?.trim() || sourceLabel(l.url) || l.url
@@ -115,9 +121,14 @@ export const user = id => store.users.find(u => u.id === id)
 export const trip = id => store.trips.find(t => t.id === id && !t.deletedAt)
 export const tripMembers = tripId => store.members.filter(m => m.tripId === tripId)
 export const isOwner = tripId => trip(tripId)?.ownerId === store.me
+// 依出發日排，早的在前，「即將到來」因此是快到的在最前面。
+// 分區由 tripPast 做（Trips.vue），「過去」那一區在那裡另外照結束日反排。
+// 以前是照 updatedAt 排，結果是改一個字那趟就跳到最上面，順序跟旅程本身無關，
+// 要找某一趟得重新掃一遍整個列表。
+// 沒有出發日的（v2.0 之前的舊資料）排到最後，不要因為空字串最小就霸佔第一個。
 export const myTrips = () => store.trips
   .filter(t => !t.deletedAt && store.members.some(m => m.tripId === t.id && m.userId === store.me && m.status === 'active'))
-  .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  .sort((a, b) => (a.start || '9999').localeCompare(b.start || '9999'))
 export const regionsOf = tripId => store.regions.filter(r => r.tripId === tripId).sort((a, b) => a.order - b.order)
 export const regionItemCount = r => store.items.filter(i => i.regionId === r.id).length
 export const myTags = tripId => store.tags.filter(g => g.tripId === tripId && g.userId === store.me)
@@ -135,12 +146,43 @@ async function attachImageUrls() {
     ...store.items.flatMap(i => i.images.flatMap(im => [im.path, im.thumbPath])),
   ]
   const signed = await api.signPaths(paths)
+  // 簽不出來（沒網路、storage 掛掉）就原封不動離開。signPaths 失敗是回空 Map 不是丟錯，
+  // 照著寫下去等於把每一張的網址清成空字串，一次暫時的失敗就讓所有圖片消失到下次
+  // 重新整理為止。留著舊網址至少有機會還是好的，真的過期了畫面也有佔位圖接手。
+  if (!signed.size && paths.some(Boolean)) return
   for (const t of store.trips) t.cover = signed.get(t.coverPath) || ''
   for (const i of store.items) for (const im of i.images) {
     im.url = signed.get(im.path) || ''
     // 縮圖是後來才加的，舊資料沒有 thumbPath，這裡就是空字串，畫面那邊要退回 url
     im.thumbUrl = signed.get(im.thumbPath) || ''
   }
+}
+
+// ---- 圖片載不到時的備援
+// 每個放圖的地方本來就有 v-else 佔位，只是條件看的是「有沒有網址」而不是
+// 「載得起來嗎」，所以網址在、圖掛掉的時候只剩破圖。記下失敗的網址讓佔位接手。
+const brokenImages = reactive(new Set())
+export const imageOk = url => Boolean(url) && !brokenImages.has(url)
+
+// 圖載不到有兩種原因，畫面分不出來：網路斷了，或簽名網址過期了（signPaths 只簽
+// 1 小時，app 開著放一小時再回來，每一張都會 401，跟網路好壞無關）。
+// 所以一律重簽一次：過期的話圖就回來了；真的沒網路的話重簽也會失敗，佔位圖照樣接手。
+//
+// 整批重簽而不是只簽壞掉那一張：一張過期代表同一批都過期了，而 signPaths 本來就是
+// 批次的。一頁二十張同時壞掉也只打一次。
+//
+// 冷卻時間是必要的，不是節流：重簽會換出新的網址字串，新網址再壞會再觸發 error，
+// 沒有冷卻就是無限迴圈打爆 storage。離線時直接不試，那時候一定簽不出來。
+const RESIGN_COOLDOWN = 30_000
+let resignedAt = 0
+export function imageBroken(url) {
+  brokenImages.add(url)
+  // 本地打包的備援插畫（'/location.png' 之類）沒有簽名可以重簽，壞了就是檔案沒放進去
+  if (url?.startsWith('/')) return
+  if (store.offline || Date.now() - resignedAt < RESIGN_COOLDOWN) return
+  resignedAt = Date.now()
+  // 失敗不用處理：attachImageUrls 簽不出來就不動原本的網址，佔位圖已經在畫面上了
+  attachImageUrls().catch(() => {})
 }
 
 // 剛登入或剛註冊時，Supabase 簽出來的 token 有一兩秒會比 PostgREST 節點的時鐘
@@ -574,7 +616,7 @@ export const leaveTrip = tripId => removeMember(tripId, store.me)
 
 // ---- 行程（F-37 到 F-49）----
 // 日期的算法全部在 date-rules.js，那支沒有相依，可以直接跑測試
-export { todayISO, addDays, stayNights, stayDayLabel } from './date-rules'
+export { todayISO, addDays, stayNights, stayDayLabel, tripPast } from './date-rules'
 
 // F-37 的日期列 + F-46 的範圍外日子。元件直接拿這個畫，不用自己算日期。
 export function tripDays(tripId) {

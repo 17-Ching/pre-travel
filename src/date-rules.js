@@ -11,6 +11,12 @@ export const addDays = (iso, n) => { const d = parseDate(iso); d.setDate(d.getDa
 // Math.round 不是保險，是必要的：跨日光節約時間的時區，兩個午夜差的是 23 或 25 小時
 export const daysBetween = (a, b) => Math.round((parseDate(b) - parseDate(a)) / 864e5)
 
+// ---- 旅程列表分區（即將到來／過去）
+// 界線放在「結束日」不是出發日：今天還在跑的旅程要留在「即將到來」，而且因為
+// 出發日已經過了，依日期排會落在最前面 —— 那正是這時候最需要一打開就看到的一趟。
+// 沒有結束日的（v2.0 之前的舊資料）一律不算過去，寧可多顯示也不要把人的旅程藏起來。
+export const tripPast = (t, today = todayISO()) => Boolean(t.end) && t.end < today
+
 // ---- 住宿（F-49）。一筆住宿 = 入住日 date → 退房日 endDate，中間每一天都看得到它。
 export const coversDate = (s, date) => s.date <= date && date <= s.endDate
 // 退房日不算一晚。同日進出（極端情況）仍算 1 晚，不要顯示 0。

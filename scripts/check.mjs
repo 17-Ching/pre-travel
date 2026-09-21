@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { isBlocked, meta, decode, toText } from '../api/preview.js'
 import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from '../src/auth-rules.js'
-import { addDays, daysBetween, coversDate, stayNights, stayDayLabel } from '../src/date-rules.js'
+import { addDays, daysBetween, coversDate, stayNights, stayDayLabel, tripPast } from '../src/date-rules.js'
 import { imagePaths, unusedPaths } from '../src/image-rules.js'
 
 // ── SSRF 阻擋名單（F-14）
@@ -98,6 +98,17 @@ assert.equal(stayDayLabel(stay, '2026-09-16'), '退房')
 
 // 同日進出仍算 1 晚，不要顯示 0 晚
 assert.equal(stayNights({ date: '2026-09-13', endDate: '2026-09-13' }), 1)
+
+// ── 旅程列表分區。界線在結束日，進行中的旅程不可以掉進「過去」
+const today = '2026-09-21'
+assert.equal(tripPast({ start: '2026-09-01', end: '2026-09-20' }, today), true, '昨天結束的是過去')
+assert.equal(tripPast({ start: '2026-09-18', end: '2026-09-21' }, today), false,
+  '今天退房的還在跑，不算過去')
+assert.equal(tripPast({ start: '2026-09-18', end: '2026-09-25' }, today), false, '進行中不算過去')
+assert.equal(tripPast({ start: '2026-11-01', end: '2026-11-05' }, today), false, '還沒開始不算過去')
+// v2.0 之前的舊資料可能沒有日期，寧可顯示在「即將到來」也不要把人的旅程藏進過去
+assert.equal(tripPast({ start: '2020-01-01', end: null }, today), false, '沒有結束日就不算過去')
+assert.equal(tripPast({}, today), false)
 
 // ── 刪項目時清 bucket。刪錯是永久資料遺失，所以每個條件都要擋住。
 const img = (n) => ({ path: `t/${n}.jpg`, thumbPath: `t/${n}-s.jpg`, w: 1600, h: 1200 })

@@ -11,6 +11,10 @@ import {
   countryName,
   fmtDate,
   tagHue,
+  tripPast,
+  imageOk,
+  imageBroken,
+  ART,
 } from "../store";
 import TopBar from "../components/TopBar.vue";
 import Avatar from "../components/Avatar.vue";
@@ -18,6 +22,26 @@ import LoadState from "../components/LoadState.vue";
 import ThemeToggle from "../components/ThemeToggle.vue";
 
 const trips = computed(myTrips);
+// 空的那一區不要留一個標題在那裡，所以兩區都算完才濾掉空的
+const groups = computed(() =>
+  [
+    {
+      key: "upcoming",
+      name: "即將到來",
+      items: trips.value.filter((t) => !tripPast(t)),
+    },
+    {
+      key: "past",
+      name: "過去",
+      // 剛結束的排前面。比的是結束日不是出發日：一趟長的包住一趟短的時
+      // （9/1–9/30 與 9/5–9/10），先出發的那趟反而是後結束的。
+      // filter 已經給了新陣列，這裡 sort 不會動到 store。
+      items: trips.value
+        .filter((t) => tripPast(t))
+        .sort((a, b) => (b.end || "").localeCompare(a.end || "")),
+    },
+  ].filter((g) => g.items.length),
+);
 const activeMembers = (id) =>
   tripMembers(id)
     .filter((m) => m.status === "active")
@@ -55,79 +79,101 @@ const counts = (id) => {
       >
     </div>
 
-    <!-- 資料夾格狀：上緣色塊 + 卡身，雙欄 -->
-    <ul v-else class="grid grid-cols-2 gap-x-3 gap-y-4 pt-3 sm:grid-cols-3">
-      <li v-for="t in trips" :key="t.id" class="relative pt-3">
-        <span
-          aria-hidden="true"
-          :class="[
-            'folder-tab absolute left-3 top-0 h-3.5 w-16 rounded-t-[8px]',
-            tabHue(t.name),
-          ]"
-        />
-        <RouterLink
-          :to="`/trips/${t.id}`"
-          class="card relative block overflow-hidden shadow-e1 transition duration-150 active:scale-[0.98]"
+    <!-- 資料夾格狀：上緣色塊 + 卡身，雙欄。即將到來／過去各一區。
+         v-for 包在 template v-else 裡，不跟 v-else 擠在同一個標籤上（Vue 3 會警告） -->
+    <template v-else>
+      <section v-for="g in groups" :key="g.key" class="mb-8 last:mb-0">
+        <h2
+          class="mb-1 flex items-center gap-2 text-[13px] font-semibold tracking-wide text-muted"
         >
-          <div class="relative">
-            <img
-              v-if="t.cover"
-              :src="t.cover"
-              :alt="t.name"
-              class="aspect-[16/10] w-full bg-line object-cover"
-            />
-            <div
-              v-else
-              class="flex aspect-[16/10] w-full items-center justify-center bg-tint-soft text-[40px] leading-none"
-            >
-              {{ flag(t.country) }}
-            </div>
+          <span class="size-1.5 rounded-full bg-tint" aria-hidden="true" />{{
+            g.name
+          }}
+          <span class="font-normal tabular-nums">{{ g.items.length }}</span>
+        </h2>
+        <ul class="grid grid-cols-2 gap-x-3 gap-y-4 pt-3 sm:grid-cols-3">
+          <li v-for="t in g.items" :key="t.id" class="relative pt-3">
             <span
-              class="absolute left-1.5 top-1.5 inline-flex max-w-[calc(100%-0.75rem)] items-center gap-1 truncate rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm"
+              aria-hidden="true"
+              :class="[
+                'folder-tab absolute left-3 top-0 h-3.5 w-16 rounded-t-[8px]',
+                tabHue(t.name),
+              ]"
+            />
+            <RouterLink
+              :to="`/trips/${t.id}`"
+              class="card relative block overflow-hidden shadow-e1 transition duration-150 active:scale-[0.98]"
             >
-              {{ flag(t.country) }} {{ countryName(t.country) }}
-            </span>
-          </div>
-
-          <div class="p-2.5">
-            <p class="text-[11px] tabular-nums text-muted">
-              {{ counts(t.id).place }} 地點・{{ counts(t.id).shop }} 購物
-            </p>
-            <h2
-              class="mt-1 line-clamp-2 text-[14px] font-semibold leading-snug tracking-tight"
-            >
-              {{ t.name }}
-            </h2>
-            <div class="mt-2 flex items-end justify-between gap-1">
-              <span
-                class="min-w-0 truncate text-[11px] tabular-nums text-muted"
-              >
-                <template v-if="t.start"
-                  >{{ fmtDate(t.start)
-                  }}<template v-if="t.end"
-                    >–{{ fmtDate(t.end) }}</template
-                  ></template
-                >
-              </span>
-              <div class="flex shrink-0 -space-x-1.5">
-                <Avatar
-                  v-for="u in activeMembers(t.id).slice(0, 3)"
-                  :key="u.id"
-                  :user="u"
-                  :size="20"
-                  class="ring-2 ring-card"
+              <div class="relative">
+                <img
+                  v-if="imageOk(t.cover)"
+                  :src="t.cover"
+                  :alt="t.name"
+                  class="aspect-[16/10] w-full bg-line object-cover"
+                  @error="imageBroken(t.cover)"
                 />
-                <span
-                  v-if="activeMembers(t.id).length > 3"
-                  class="flex size-5 items-center justify-center rounded-full bg-line text-[9px] font-medium ring-2 ring-card"
-                  >+{{ activeMembers(t.id).length - 3 }}</span
+                <!-- 國家還是看得到：左上角那個徽章在有沒有封面時都會畫 -->
+                <div
+                  v-else
+                  class="flex aspect-[16/10] w-full items-center justify-center overflow-hidden bg-tint-soft text-[40px] leading-none"
                 >
+                  <img
+                    v-if="imageOk(ART.trip)"
+                    :src="ART.trip"
+                    alt=""
+                    class="w-[62%] object-contain"
+                    @error="imageBroken(ART.trip)"
+                  />
+                  <template v-else>{{ flag(t.country) }}</template>
+                </div>
+                <span
+                  class="absolute left-1.5 top-1.5 inline-flex max-w-[calc(100%-0.75rem)] items-center gap-1 truncate rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm"
+                >
+                  {{ flag(t.country) }} {{ countryName(t.country) }}
+                </span>
               </div>
-            </div>
-          </div>
-        </RouterLink>
-      </li>
-    </ul>
+
+              <div class="p-2.5">
+                <p class="text-[11px] tabular-nums text-muted">
+                  {{ counts(t.id).place }} 地點・{{ counts(t.id).shop }} 購物
+                </p>
+                <h2
+                  class="mt-1 line-clamp-2 text-[14px] font-semibold leading-snug tracking-tight"
+                >
+                  {{ t.name }}
+                </h2>
+                <div class="mt-2 flex items-end justify-between gap-1">
+                  <span
+                    class="min-w-0 truncate text-[11px] tabular-nums text-muted"
+                  >
+                    <template v-if="t.start"
+                      >{{ fmtDate(t.start)
+                      }}<template v-if="t.end"
+                        >–{{ fmtDate(t.end) }}</template
+                      ></template
+                    >
+                  </span>
+                  <div class="flex shrink-0 -space-x-1.5">
+                    <Avatar
+                      v-for="u in activeMembers(t.id).slice(0, 3)"
+                      :key="u.id"
+                      :user="u"
+                      :size="20"
+                      class="ring-2 ring-card"
+                    />
+                    <span
+                      v-if="activeMembers(t.id).length > 3"
+                      class="flex size-5 items-center justify-center rounded-full bg-line text-[9px] font-medium ring-2 ring-card"
+                      >+{{ activeMembers(t.id).length - 3 }}</span
+                    >
+                  </div>
+                </div>
+              </div>
+            </RouterLink>
+          </li>
+        </ul>
+      </section>
+    </template>
   </main>
 
   <RouterLink

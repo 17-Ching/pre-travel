@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { PhMapPin, PhShoppingBag, PhCheck, PhDotsThreeVertical } from '@phosphor-icons/vue'
-import { store, user, sourceLabel, firstUrl, scheduledSlots, thumbOf } from '../store'
+import { store, user, sourceLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
 import TagChip from './TagChip.vue'
 import Avatar from './Avatar.vue'
 
@@ -36,9 +36,11 @@ function fire(evt) {
   <article :class="['card flex gap-3 p-3 transition duration-200', done ? 'opacity-55' : 'shadow-e1']">
     <RouterLink :to="`/trips/${item.tripId}/items/${item.id}`" class="flex min-w-0 flex-1 gap-3">
       <div class="relative size-[88px] shrink-0">
-        <img v-if="thumb" :src="thumb" alt="" loading="lazy" class="size-full rounded-[10px] bg-line object-cover" />
-        <div v-else class="flex size-full items-center justify-center rounded-[10px] bg-tint-soft text-tint">
-          <component :is="item.type === 'place' ? PhMapPin : PhShoppingBag" :size="28" />
+        <img v-if="imageOk(thumb)" :src="thumb" alt="" loading="lazy" class="size-full rounded-[10px] bg-line object-cover" @error="imageBroken(thumb)" />
+        <!-- 沒有照片、或照片載不到時的備援。插畫自己沒放進去就再退回圖示 -->
+        <div v-else class="flex size-full items-center justify-center overflow-hidden rounded-[10px] bg-tint-soft text-tint">
+          <img v-if="imageOk(ART[item.type])" :src="ART[item.type]" alt="" class="size-[72%] object-contain" @error="imageBroken(ART[item.type])" />
+          <component v-else :is="item.type === 'place' ? PhMapPin : PhShoppingBag" :size="28" />
         </div>
         <!-- 來源一眼看得出來：從 Maps 還是 IG 存的 -->
         <span v-if="source" class="absolute bottom-1 left-1 max-w-[80px] truncate rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">{{ source }}</span>

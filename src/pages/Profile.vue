@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { PhCamera, PhSignOut, PhArrowCounterClockwise, PhKey, PhCaretDown } from '@phosphor-icons/vue'
-import { me, updateProfile, logout, toast } from '../store'
+import { me, updateProfile, logout, toast, imageOk, imageBroken } from '../store'
 import { changePassword } from '../supabase'
 import PasswordInput from '../components/PasswordInput.vue'
 import TopBar from '../components/TopBar.vue'
@@ -72,7 +72,7 @@ async function submitPw() {
     <!-- 頭像：整塊可點，就是檔案選擇器 -->
     <div class="flex flex-col items-center">
       <label class="group relative cursor-pointer">
-        <img v-if="form.avatar" :src="form.avatar" :alt="form.name" class="size-28 rounded-full bg-line object-cover ring-4 ring-card" />
+        <img v-if="imageOk(form.avatar)" :src="form.avatar" :alt="form.name" class="size-28 rounded-full bg-line object-cover ring-4 ring-card" @error="imageBroken(form.avatar)" />
         <!-- 帳號密碼註冊的人沒有頭像，跟 Avatar 元件用同一套字母備援 -->
         <span v-else class="flex size-28 items-center justify-center rounded-full bg-tint-soft text-[44px] font-semibold text-tint ring-4 ring-card">
           {{ (form.name || '?').trim().charAt(0).toUpperCase() }}

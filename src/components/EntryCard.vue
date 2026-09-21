@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed } from '@phosphor-icons/vue'
-import { entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user } from '../store'
+import { entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
 // badge：住宿用來標「入住 / 第 2 晚 / 退房・共 3 晚」，由呼叫端算好（它才知道現在看的是哪天）
@@ -51,7 +51,7 @@ const timeLabel = computed(() => {
         <component :is="isFlight ? PhAirplaneTakeoff : isStay ? PhBed : PhArrowRight" :size="20" weight="bold" />
       </span>
       <span v-else class="relative size-11 shrink-0">
-        <img v-if="thumb" :src="thumb" alt="" loading="lazy" class="size-full rounded-[10px] bg-line object-cover" />
+        <img v-if="imageOk(thumb)" :src="thumb" alt="" loading="lazy" class="size-full rounded-[10px] bg-line object-cover" @error="imageBroken(thumb)" />
         <span v-else class="flex size-full items-center justify-center rounded-[10px] bg-tint-soft text-tint">
           <PhMapPin :size="18" />
         </span>
