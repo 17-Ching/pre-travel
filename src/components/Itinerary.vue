@@ -152,7 +152,30 @@ function submitForm() {
 
 // ── 卡片選單：編輯 / 上下移 / 搬到其他天 / 刪除
 const entryMenu = ref(null)
+// 搬到其他天。要搬的項目與選好的目的地分開放 ——
+// 原本是把選好的日期寫回 moveFor（moveFor = { ...moveFor, date }），那個展開會做出一份
+// 跟 store 脫鉤的普通物件，doMove 交給 moveEntry 的就不是畫面上那一筆，
+// 結果是伺服器真的改了、本地鏡像沒動，看起來就像「搬移沒有成功」，重新整理才會跳過去。
 const moveFor = ref(null)
+const moveTo = ref(null)
+function openMove(e) {
+  moveFor.value = e
+  moveTo.value = { date: e.date, section: e.section, slot: e.slot }
+}
+// 沒挑到新位置就不給按，不然會送出一筆原地不動的更新
+const moveChanged = computed(() => {
+  const e = moveFor.value, t = moveTo.value
+  return Boolean(e && t) && (t.date !== e.date || t.section !== e.section || t.slot !== e.slot)
+})
+const moveLabel = computed(() => {
+  const t = moveTo.value
+  if (!t) return ''
+  const d = days.value.find(x => x.date === t.date)
+  const day = d ? `${d.date.slice(5).replace('-', '/')}（${d.weekday}）` : t.date
+  // 航班自己成一區，沒有時段的概念
+  if (moveFor.value?.kind === 'flight') return day
+  return `${day} ${[...SLOTS, ...MEALS].find(([k]) => k === t.slot)?.[1] ?? ''}`
+})
 // 航班與住宿各自成區，上下移只在同一區裡換，不要動到同一個時段的其他項目
 function siblings(e) {
   if (e.kind === 'flight') return flightsOf(props.tripId, e.date)
@@ -168,8 +191,8 @@ function nudge(e, dir) {
 }
 // F-40：有時間的項目依時間自動排序，手動調順序對它沒有意義
 const canNudge = e => !e.startTime && siblings(e).length > 1
-function doMove(target) {
-  moveEntry(moveFor.value, target)
+function doMove() {
+  moveEntry(moveFor.value, moveTo.value)
   toast('已搬移')
   moveFor.value = null
   entryMenu.value = null
@@ -502,7 +525,7 @@ const addFor = ref(null)
       </template>
       <p v-else-if="entryMenu?.startTime" class="px-3 py-1.5 text-[12px] text-muted">有時間的項目會依時間自動排序</p>
       <!-- 住宿的日期在自己的表單裡改，不走搬移 -->
-      <button v-if="entryMenu?.kind !== 'stay'" class="row" :disabled="store.offline" @click="moveFor = entryMenu">
+      <button v-if="entryMenu?.kind !== 'stay'" class="row" :disabled="store.offline" @click="openMove(entryMenu)">
         <PhCalendarBlank :size="20" class="text-muted" /><span class="flex-1">搬到其他天或時段</span>
       </button>
       <button class="row mt-1 border-t border-line pt-1 text-danger" :disabled="store.offline" @click="removeEntry">
@@ -515,29 +538,38 @@ const addFor = ref(null)
     <Sheet :open="!!moveFor" title="搬到" @update:open="v => !v && (moveFor = null)">
       <div class="px-2 pb-2">
         <p class="mb-2 mt-1 text-[13px] font-semibold">日期</p>
-        <!-- 航班沒有時段可選，點日期就直接搬 -->
+        <!-- 選了只是選起來，真的搬要按下面那顆 -->
         <div class="flex flex-wrap gap-2">
           <button v-for="d in days" :key="d.date"
-            :class="['chip-region', moveFor?.kind !== 'flight' && moveFor?.date === d.date && 'on']"
-            @click="moveFor.kind === 'flight' ? doMove({ date: d.date, section: 'schedule', slot: moveFor.slot }) : (moveFor = { ...moveFor, date: d.date })">
+            :class="['chip-region', moveTo?.date === d.date && 'on']"
+            @click="moveTo = { ...moveTo, date: d.date }">
             {{ d.date.slice(5).replace('-', '/') }}（{{ d.weekday }}）
           </button>
         </div>
+        <!-- 航班自己成一區，沒有時段可選 -->
         <template v-if="moveFor?.kind !== 'flight'">
           <p class="mb-2 mt-4 text-[13px] font-semibold">時段</p>
           <div class="flex flex-wrap gap-2">
-            <button v-for="[slot, label] in SLOTS" :key="slot" class="chip-state"
-              @click="doMove({ date: moveFor.date, section: 'schedule', slot })">{{ label }}</button>
+            <button v-for="[slot, label] in SLOTS" :key="slot"
+              :class="['chip-state', moveTo?.section === 'schedule' && moveTo?.slot === slot && 'on']"
+              @click="moveTo = { ...moveTo, section: 'schedule', slot }">{{ label }}</button>
           </div>
           <p class="mb-2 mt-4 text-[13px] font-semibold">餐別</p>
           <div class="flex flex-wrap gap-2">
-            <button v-for="[slot, label] in MEALS" :key="slot" class="chip-state"
+            <button v-for="[slot, label] in MEALS" :key="slot"
+              :class="['chip-state', moveTo?.section === 'meal' && moveTo?.slot === slot && 'on']"
               :disabled="moveFor?.kind !== 'place'"
-              @click="doMove({ date: moveFor.date, section: 'meal', slot })">{{ label }}</button>
+              @click="moveTo = { ...moveTo, section: 'meal', slot }">{{ label }}</button>
           </div>
           <p v-if="moveFor?.kind === 'transport'" class="mt-2 text-[12px] text-muted">交通項目不能放進餐食備選。</p>
         </template>
       </div>
+
+      <template #footer>
+        <button class="btn-primary w-full" :disabled="!moveChanged" @click="doMove">
+          {{ moveChanged ? `搬到 ${moveLabel}` : '選一個新的位置' }}
+        </button>
+      </template>
     </Sheet>
 
     <!-- F-41 從清單選地點，可多選 -->
