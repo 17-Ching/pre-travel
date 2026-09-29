@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
   PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks } from '@phosphor-icons/vue'
@@ -75,7 +75,29 @@ const activeFilters = computed(() => {
 })
 
 function clearFilters() { Object.assign(p, { region: 'all', status: '', tag: '', q: '' }); showSearch.value = false }
-function setType(type) { if (p.type !== type) { p.type = type; p.status = '' } }
+function setType(type) {
+  if (p.type === type) return
+  p.type = type
+  p.status = ''
+  // 換子清單等於整份內容換掉，停在原本的捲動位置會落在不相干的地方（而且兩邊項目數
+  // 常常差很多，捲到一半直接看到空白）
+  scrollTo({ top: 0 })
+}
+
+// 地區標題 sticky。它要黏在上面那一整塊（分頁＋看誰的＋地點/購物＋已篩選）下面，
+// 而那塊的高度是會變的 —— 有沒有其他成員、有沒有正在篩選都會多一列。
+// 所以量它，不要寫死一個 px：寫死的話多一列就被蓋住，少一列就浮著一條縫。
+const headEl = ref()
+const headH = ref(0)
+let ro
+watch(headEl, el => {
+  ro?.disconnect()
+  if (!el) return
+  ro = new ResizeObserver(() => (headH.value = el.offsetHeight))
+  ro.observe(el)
+  headH.value = el.offsetHeight
+})
+onUnmounted(() => ro?.disconnect())
 function toggle(key, v) { p[key] = p[key] === v ? '' : v }
 function toggleSearch() { showSearch.value = !showSearch.value; if (!showSearch.value) p.q = '' }
 function add() { store.offline ? toast('需要網路') : router.push({ path: `/trips/${tripId}/items/new`, query: { type: p.type, region: p.region } }) }
@@ -163,7 +185,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 
     <!-- 常駐的「你在哪」：分頁（願望清單／行程）＋ 誰的清單 ＋ 子清單（什麼）。
          進度條是 2px 底線，不另佔一行。 -->
-    <div class="sticky top-14 z-10 bg-surface">
+    <div ref="headEl" class="sticky top-14 z-10 bg-surface">
       <nav class="rail flex gap-5">
         <button :class="tabCls('list')" @click="p.tab = 'list'"><PhListChecks :size="18" />願望清單</button>
         <button :class="tabCls('itinerary')" @click="p.tab = 'itinerary'"><PhCalendarBlank :size="18" />行程</button>
@@ -236,7 +258,10 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       </div>
       <template v-else>
         <section v-for="g in groups" :key="g.key" class="mb-6">
-          <h2 v-if="g.name" class="mb-2.5 flex items-center gap-2 text-[13px] font-semibold tracking-wide text-muted">
+          <!-- -mx-4 px-4 讓底色鋪滿整個寬度（main 有 1rem 的 gutter），
+               不然卡片會從標題左右兩側的縫隙透出來 -->
+          <h2 v-if="g.name" :style="{ top: `calc(3.5rem + ${headH}px)` }"
+            class="sticky z-[5] -mx-4 mb-2.5 flex items-center gap-2 bg-surface px-4 py-1.5 text-[13px] font-semibold tracking-wide text-muted">
             <span class="size-1.5 rounded-full bg-tint" aria-hidden="true" />{{ g.name }}
             <span class="font-normal tabular-nums">{{ g.items.length }}</span>
           </h2>
