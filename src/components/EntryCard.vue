@@ -13,8 +13,12 @@ const thumb = computed(() => entryThumb(props.entry))
 const detached = computed(() => entryDetached(props.entry))
 const isFlight = computed(() => props.entry.kind === 'flight')
 const isStay = computed(() => props.entry.kind === 'stay')
-// 航班跟交通共用同一套外觀（左側直線 + 淡底），只有圖示與副標不同
+// 航班跟住宿共用同一套卡片外觀（左側直線 + 淡底），只有圖示與副標不同
 const isTransport = computed(() => props.entry.kind !== 'place')
+// 一般交通（走路、電車…）自己一套：它不是「一個地點」，是兩點之間的移動，
+// 做成跟地點一樣大的卡片會讓時段看起來站點兩倍多。壓成一條細列＋虛線連接。
+// 航班與住宿不走這條：它們各自成區，本來就是獨立的一筆，不是誰與誰之間。
+const isLeg = computed(() => props.entry.kind === 'transport')
 // 誰搭這班。沒指定就是全員，不佔版面
 const passengers = computed(() => (props.entry.passengerIds ?? []).map(user).filter(Boolean))
 // 連結來源標在縮圖上，跟清單卡片同一套（ItemCard），有沒有東西可看一眼就知道
@@ -38,7 +42,38 @@ const timeLabel = computed(() => {
 </script>
 
 <template>
-  <article :class="['relative flex gap-2.5 rounded-[14px] border p-2.5 transition duration-200',
+  <!-- 交通：連接線而不是站點。縮圖那一格換成 44px 寬的細欄，圓點跟上下卡片的
+       圖示對齊在同一條垂直線上，虛線穿過去，看起來就是 A 到 B 的那一段路。 -->
+  <article v-if="isLeg" :class="['relative flex items-center gap-2.5 py-1 pl-2.5', entry.done && 'opacity-55']">
+    <span aria-hidden="true" class="absolute inset-y-0 left-[32px] w-px border-l border-dashed border-tint/45" />
+    <button type="button" class="flex min-w-0 flex-1 items-center gap-2.5 text-left" :aria-label="`${title} 的動作`" @click="$emit('menu')">
+      <span class="z-10 flex w-11 shrink-0 justify-center">
+        <span class="flex size-[22px] items-center justify-center rounded-full bg-tint text-tint-fg">
+          <PhArrowRight :size="12" weight="bold" />
+        </span>
+      </span>
+      <span class="min-w-0 flex-1 py-0.5">
+        <span class="flex flex-wrap items-baseline gap-x-1.5">
+          <span v-if="entry.transportMode" class="text-[13px] font-semibold text-tint">{{ entry.transportMode }}</span>
+          <span :class="['min-w-0 truncate text-[13px]', entry.done && 'line-through decoration-1']">{{ title }}</span>
+          <span v-if="timeLabel" class="text-[11px] font-medium tabular-nums text-muted">{{ timeLabel }}</span>
+        </span>
+        <span v-if="entry.note" class="mt-0.5 line-clamp-1 block text-[12px] text-muted">{{ entry.note }}</span>
+      </span>
+    </button>
+    <div class="flex shrink-0 items-center gap-0.5">
+      <button :aria-label="entry.done ? '取消完成' : '標記完成'" @click="$emit('toggle')"
+        :class="['flex size-7 items-center justify-center rounded-full border transition-colors duration-150',
+          entry.done ? 'border-transparent bg-accent text-accent-fg' : 'border-line text-muted']">
+        <PhCheck :size="13" weight="bold" />
+      </button>
+      <button class="icon-btn size-7 text-muted" aria-label="更多動作" @click="$emit('menu')">
+        <PhDotsThreeVertical :size="15" weight="bold" />
+      </button>
+    </div>
+  </article>
+
+  <article v-else :class="['relative flex gap-2.5 rounded-[14px] border p-2.5 transition duration-200',
     // F-39：交通用左側直線 + 不同底色，跟一般行程項目明顯區隔
     isTransport ? 'border-dashed border-tint/50 bg-tint-soft/40' : 'border-line bg-card',
     entry.done ? 'opacity-55' : 'shadow-e1']">

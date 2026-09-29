@@ -146,8 +146,30 @@ function submitForm() {
     ...(isStay.value ? { date: stayStart.value, endDate: f.endDate } : {}),
   }
   if (ctx.entry) updateEntry(ctx.entry, editingRef.value ? patch : { ...patch, title: composedTitle.value })
-  else addEntry({ tripId: props.tripId, date: date.value, section: ctx.section, slot: ctx.slot, itemId: null, title: composedTitle.value, ...patch })
+  else {
+    const created = addEntry({ tripId: props.tripId, date: date.value, section: ctx.section, slot: ctx.slot, itemId: null, title: composedTitle.value, ...patch })
+    // 從兩筆之間的加號進來的：新的那段要排在點下去的那一筆後面，不是整個時段的最後
+    if (insertAfter.value) {
+      const ids = entriesOf(props.tripId, date.value, ctx.section, ctx.slot).map(e => e.id).filter(id => id !== created.id)
+      const at = ids.indexOf(insertAfter.value)
+      ids.splice(at < 0 ? ids.length : at + 1, 0, created.id)
+      reorderEntries(props.tripId, date.value, ctx.section, ctx.slot, ids)
+    }
+  }
+  insertAfter.value = null
   formFor.value = null
+}
+
+// 兩筆之間的加號：插一段交通進去。記住點的是哪一筆後面，存檔時才知道要排在哪
+const insertAfter = ref(null)
+function openTransportAfter(slot, prev) {
+  openAdd('schedule', slot, 'transport')
+  if (!formFor.value) return   // 離線時 openAdd 會擋下來
+  insertAfter.value = prev.id
+  // F-40：有時間的一律排在沒時間的前面。前一筆有時間、新這段沒有的話，它會被丟到
+  // 整個時段的最後，看起來像沒插進去。所以帶上前一筆的結束時間（沒有就用開始時間）：
+  // 時間相同時由 order 決定先後，剛好落在它後面。表單裡看得到，不想要可以清掉。
+  form.value.startTime = prev.endTime || prev.startTime || ''
 }
 
 // ── 卡片選單：編輯 / 上下移 / 搬到其他天 / 刪除
@@ -167,6 +189,45 @@ const moveChanged = computed(() => {
   const e = moveFor.value, t = moveTo.value
   return Boolean(e && t) && (t.date !== e.date || t.section !== e.section || t.slot !== e.slot)
 })
+// ── 把住宿放進某天的時段
+// 住宿是跨多天的一筆、自己成一區，不會出現在早上／下午／晚上裡。但「傍晚回飯店
+// check-in」「早上退房寄行李」是真的要排進時段的事，所以提供一鍵把住宿資訊放過去。
+//
+// 複製一份而不是引用：行程項目只能引用「願望清單的項目」（資料庫的
+// transport_has_no_item 約束：kind = 'place' or item_id is null），住宿不是清單項目，
+// 沒有可以引用的對象。所以改了住宿名稱，已經放進時段的那筆不會跟著變。
+const stayInto = ref(null)
+const stayTo = ref(null)
+function openStayInto(e) {
+  stayInto.value = e
+  // 預設就是現在在看的這天的晚上 —— check-in 最常排在晚上
+  stayTo.value = { date: date.value, slot: 'evening' }
+}
+const stayIntoLabel = computed(() => {
+  const t = stayTo.value
+  if (!t) return ''
+  const d = days.value.find(x => x.date === t.date)
+  const day = d ? `${d.date.slice(5).replace('-', '/')}（${d.weekday}）` : t.date
+  return `${day} ${SLOTS.find(([k]) => k === t.slot)?.[1] ?? ''}`
+})
+function doStayInto() {
+  const s = stayInto.value
+  addEntry({
+    tripId: props.tripId,
+    date: stayTo.value.date,
+    section: 'schedule',
+    slot: stayTo.value.slot,
+    kind: 'place',
+    title: entryTitle(s),
+    // 連結（地圖、訂房頁）帶過去，當天點得到。備註留空：住宿的備註是訂房代號那類
+    // 長期資訊，塞進時段只是重複一份，當天要寫什麼讓使用者自己打
+    links: JSON.parse(JSON.stringify(s.links ?? [])),
+  })
+  toast('已加入行程')
+  stayInto.value = null
+  entryMenu.value = null
+}
+
 const moveLabel = computed(() => {
   const t = moveTo.value
   if (!t) return ''
@@ -337,8 +398,22 @@ const addFor = ref(null)
               </button>
             </div>
             <div v-if="s.entries.length" class="grid gap-2">
-              <EntryCard v-for="e in s.entries" :key="e.id" :entry="e"
-                @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
+              <template v-for="(e, i) in s.entries" :key="e.id">
+                <EntryCard :entry="e" @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
+                <!-- 點與點之間插一段交通。最後一筆後面不放（那邊用時段標題的加號），
+                     下一筆already是交通也不放，那個空隙已經有東西了 -->
+                <button v-if="i < s.entries.length - 1 && s.entries[i + 1].kind !== 'transport'"
+                  class="flex items-center gap-2 py-0.5" :disabled="store.offline"
+                  :aria-label="`在「${entryTitle(e)}」後面加一段交通`"
+                  @click="openTransportAfter(s.slot, e)">
+                  <span class="ml-[23px] flex size-[18px] shrink-0 items-center justify-center rounded-full border border-dashed border-tint/60 text-tint">
+                    <PhPlus :size="10" weight="bold" />
+                  </span>
+                  <!-- 光一個加號看不出來是要加什麼，寫出來才不用猜 -->
+                  <span class="shrink-0 text-[11px] text-tint">加一段交通</span>
+                  <span class="h-px flex-1 border-t border-dashed border-tint/30" aria-hidden="true" />
+                </button>
+              </template>
             </div>
             <button v-else class="w-full rounded-[12px] border border-dashed border-line py-3 text-[13px] text-muted"
               @click="addFor = { section: 'schedule', slot: s.slot }">＋ 加入行程</button>
@@ -528,6 +603,11 @@ const addFor = ref(null)
       <button v-if="entryMenu?.kind !== 'stay'" class="row" :disabled="store.offline" @click="openMove(entryMenu)">
         <PhCalendarBlank :size="20" class="text-muted" /><span class="flex-1">搬到其他天或時段</span>
       </button>
+      <!-- 住宿自己成一區、跨多天，不會出現在任何時段裡。但「傍晚回飯店 check-in」
+           「早上退房寄行李」是真的要排進某個時段的事 -->
+      <button v-else class="row" :disabled="store.offline" @click="openStayInto(entryMenu)">
+        <PhCalendarBlank :size="20" class="text-muted" /><span class="flex-1">加到某天的時段</span>
+      </button>
       <button class="row mt-1 border-t border-line pt-1 text-danger" :disabled="store.offline" @click="removeEntry">
         <PhTrash :size="20" /><span class="flex-1">從行程移除</span>
       </button>
@@ -569,6 +649,32 @@ const addFor = ref(null)
         <button class="btn-primary w-full" :disabled="!moveChanged" @click="doMove">
           {{ moveChanged ? `搬到 ${moveLabel}` : '選一個新的位置' }}
         </button>
+      </template>
+    </Sheet>
+
+    <!-- 住宿 → 某天的時段。跟「搬到」一樣是選好再按確定，不要點了就送出 -->
+    <Sheet :open="!!stayInto" :title="stayInto ? `加到時段：${entryTitle(stayInto)}` : ''"
+      @update:open="v => !v && (stayInto = null)">
+      <div class="px-2 pb-2">
+        <p class="mb-2 mt-1 text-[13px] font-semibold">日期</p>
+        <div class="flex flex-wrap gap-2">
+          <button v-for="d in days" :key="d.date"
+            :class="['chip-region', stayTo?.date === d.date && 'on']"
+            @click="stayTo = { ...stayTo, date: d.date }">
+            {{ d.date.slice(5).replace('-', '/') }}（{{ d.weekday }}）
+          </button>
+        </div>
+        <p class="mb-2 mt-4 text-[13px] font-semibold">時段</p>
+        <div class="flex flex-wrap gap-2">
+          <button v-for="[slot, label] in SLOTS" :key="slot"
+            :class="['chip-state', stayTo?.slot === slot && 'on']"
+            @click="stayTo = { ...stayTo, slot }">{{ label }}</button>
+        </div>
+        <p class="mt-3 text-[12px] leading-relaxed text-muted">會複製住宿名稱與連結過去，之後各改各的。住宿本身還是留在住宿區。</p>
+      </div>
+
+      <template #footer>
+        <button class="btn-primary w-full" @click="doStayInto">加到 {{ stayIntoLabel }}</button>
       </template>
     </Sheet>
 
