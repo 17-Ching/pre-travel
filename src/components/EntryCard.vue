@@ -44,7 +44,10 @@ const timeLabel = computed(() => {
 <template>
   <!-- 交通：連接線而不是站點。縮圖那一格換成 44px 寬的細欄，圓點跟上下卡片的
        圖示對齊在同一條垂直線上，虛線穿過去，看起來就是 A 到 B 的那一段路。 -->
-  <article v-if="isLeg" :class="['relative flex items-center gap-2.5 py-1 pl-2.5', entry.done && 'opacity-55']">
+  <!-- 交通沒有打勾：它不是一件要完成的事，是兩個點之間的位移。
+       刻意連 done 的樣式都不吃 —— 舊資料可能有人勾過，沒有勾可以取消的話，
+       那一筆會永遠淡在那裡。 -->
+  <article v-if="isLeg" class="relative flex items-center gap-2.5 py-1 pl-2.5">
     <span aria-hidden="true" class="absolute inset-y-0 left-[32px] w-px border-l border-dashed border-tint/45" />
     <button type="button" class="flex min-w-0 flex-1 items-center gap-2.5 text-left" :aria-label="`${title} 的動作`" @click="$emit('menu')">
       <span class="z-10 flex w-11 shrink-0 justify-center">
@@ -55,22 +58,15 @@ const timeLabel = computed(() => {
       <span class="min-w-0 flex-1 py-0.5">
         <span class="flex flex-wrap items-baseline gap-x-1.5">
           <span v-if="entry.transportMode" class="text-[13px] font-semibold text-tint">{{ entry.transportMode }}</span>
-          <span :class="['min-w-0 truncate text-[13px]', entry.done && 'line-through decoration-1']">{{ title }}</span>
+          <span class="min-w-0 truncate text-[13px]">{{ title }}</span>
           <span v-if="timeLabel" class="text-[11px] font-medium tabular-nums text-muted">{{ timeLabel }}</span>
         </span>
         <span v-if="entry.note" class="mt-0.5 line-clamp-1 block text-[12px] text-muted">{{ entry.note }}</span>
       </span>
     </button>
-    <div class="flex shrink-0 items-center gap-0.5">
-      <button :aria-label="entry.done ? '取消完成' : '標記完成'" @click="$emit('toggle')"
-        :class="['flex size-7 items-center justify-center rounded-full border transition-colors duration-150',
-          entry.done ? 'border-transparent bg-accent text-accent-fg' : 'border-line text-muted']">
-        <PhCheck :size="13" weight="bold" />
-      </button>
-      <button class="icon-btn size-7 text-muted" aria-label="更多動作" @click="$emit('menu')">
-        <PhDotsThreeVertical :size="15" weight="bold" />
-      </button>
-    </div>
+    <button class="icon-btn size-7 shrink-0 text-muted" aria-label="更多動作" @click="$emit('menu')">
+      <PhDotsThreeVertical :size="15" weight="bold" />
+    </button>
   </article>
 
   <article v-else :class="['relative flex gap-2.5 rounded-[14px] border p-2.5 transition duration-200',

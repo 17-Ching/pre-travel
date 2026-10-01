@@ -84,11 +84,13 @@ function openAdd(section, slot, kind = 'place') {
   if (kind === 'stay') Object.assign(form.value, { startDate: date.value, endDate: addDays(date.value, 1) })
   formFor.value = { section, slot }
 }
+const ROUTE_KINDS = ['flight', 'transport']
 function openEdit(entry) {
-  // 航班的標題存的是一整串「A → B」，編輯時拆回兩格。
+  // 航班與交通的標題存的是一整串「A → B」，編輯時拆回兩格。
   // 只切第一個箭頭：轉機寫成「東京 → 首爾 → 倫敦」時，後半整段留在「到」，存回去才不會掉字。
-  const arrowAt = entry.kind === 'flight' ? entry.title.indexOf('→') : -1
-  const from = entry.kind !== 'flight' ? '' : arrowAt < 0 ? entry.title.trim() : entry.title.slice(0, arrowAt).trim()
+  const isRouteKind = ROUTE_KINDS.includes(entry.kind)
+  const arrowAt = isRouteKind ? entry.title.indexOf('→') : -1
+  const from = !isRouteKind ? '' : arrowAt < 0 ? entry.title.trim() : entry.title.slice(0, arrowAt).trim()
   const to = arrowAt < 0 ? '' : entry.title.slice(arrowAt + 1).trim()
   form.value = { title: entry.itemId ? '' : entry.title, kind: entry.kind, transportMode: entry.transportMode || '',
     startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
@@ -106,10 +108,13 @@ const badTimes = computed(() => {
 })
 const stayStart = computed(() => form.value.startDate || date.value)
 const badStayRange = computed(() => Boolean(isStay.value && form.value.endDate && form.value.endDate < stayStart.value))
-// 航班的標題由兩格組出來，只填一格也存得起來（不留孤零零的箭頭）
+// 航班與交通都是「從哪到哪」，標題拆兩格填，箭頭由系統補 ——
+// 在電腦上打「→」很麻煩（使用者回報過，航班才改成兩格的）
+const isRoute = computed(() => ROUTE_KINDS.includes(form.value.kind))
+// 標題由兩格組出來，只填一格也存得起來（不留孤零零的箭頭）
 const composedTitle = computed(() => {
   const f = form.value
-  if (!isFlight.value) return f.title.trim()
+  if (!isRoute.value) return f.title.trim()
   return [f.from.trim(), f.to.trim()].filter(Boolean).join(ARROW)
 })
 const canSaveForm = computed(() => !badTimes.value && !badStayRange.value
@@ -400,9 +405,10 @@ const addFor = ref(null)
             <div v-if="s.entries.length" class="grid gap-2">
               <template v-for="(e, i) in s.entries" :key="e.id">
                 <EntryCard :entry="e" @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
-                <!-- 點與點之間插一段交通。最後一筆後面不放（那邊用時段標題的加號），
-                     下一筆already是交通也不放，那個空隙已經有東西了 -->
-                <button v-if="i < s.entries.length - 1 && s.entries[i + 1].kind !== 'transport'"
+                <!-- 每一筆後面都能插一段交通，包含最後一筆 —— 早上的最後一個點到下午的
+                     第一個點之間也要移動，那段就加在這個時段的尾巴。
+                     只有「下一筆已經是交通」時不放，那個空隙已經有東西了。 -->
+                <button v-if="i === s.entries.length - 1 || s.entries[i + 1].kind !== 'transport'"
                   class="flex items-center gap-2 py-0.5" :disabled="store.offline"
                   :aria-label="`在「${entryTitle(e)}」後面加一段交通`"
                   @click="openTransportAfter(s.slot, e)">
@@ -467,19 +473,21 @@ const addFor = ref(null)
     <!-- 新增 / 編輯表單（F-38、F-39、F-40） -->
     <Sheet :open="!!formFor" :title="formFor?.entry ? '編輯' : isFlight ? '加航班' : isStay ? '加住宿' : form.kind === 'transport' ? '加一段交通' : '新增'" @update:open="v => !v && (formFor = null)">
       <div class="grid gap-3 px-2 pb-2">
-        <!-- 航線拆兩格，箭頭由系統補上：使用者反映在電腦上打「→」很麻煩 -->
-        <div v-if="isFlight && !editingRef">
-          <span class="label">航線</span>
+        <!-- 航線與交通路線都拆兩格，箭頭由系統補上：使用者反映在電腦上打「→」很麻煩 -->
+        <div v-if="isRoute && !editingRef">
+          <span class="label">{{ isFlight ? '航線' : '路線' }}</span>
           <div class="flex items-center gap-2">
-            <input v-model="form.from" class="input min-w-0 flex-1" maxlength="45" placeholder="從（例：桃園）" aria-label="出發地" />
+            <input v-model="form.from" class="input min-w-0 flex-1" maxlength="45"
+              :placeholder="isFlight ? '從（例：桃園）' : '從（例：新宿）'" aria-label="出發地" />
             <PhArrowRight :size="18" weight="bold" class="shrink-0 text-muted" aria-hidden="true" />
-            <input v-model="form.to" class="input min-w-0 flex-1" maxlength="45" placeholder="到（例：成田）" aria-label="抵達地" />
+            <input v-model="form.to" class="input min-w-0 flex-1" maxlength="45"
+              :placeholder="isFlight ? '到（例：成田）' : '到（例：鎌倉）'" aria-label="抵達地" />
           </div>
         </div>
         <div v-else-if="!editingRef">
           <label class="label" for="e-title">{{ isStay ? '住宿名稱' : '標題' }}</label>
           <input id="e-title" v-model="form.title" class="input" maxlength="100"
-            :placeholder="isStay ? '例：東橫 INN 新宿' : form.kind === 'transport' ? '例：新宿 → 鎌倉' : '要做什麼'" />
+            :placeholder="isStay ? '例：東橫 INN 新宿' : '要做什麼'" />
         </div>
         <p v-else class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
           這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走；下面的備註與連結只屬於行程這一筆。
