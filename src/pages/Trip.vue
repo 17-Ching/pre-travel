@@ -121,15 +121,27 @@ function edit() {
 const SLOTS = [['morning', '早上'], ['afternoon', '下午'], ['evening', '晚上']]
 const MEALS = [['breakfast', '早餐'], ['lunch', '午餐'], ['snack', '點心'], ['dinner', '晚餐'], ['late_night', '宵夜']]
 const days = computed(() => tripDays(tripId))
-const addFor = ref(null)   // { item, date }
+// 要加的項目與選好的位置分開放，跟行程頁的「搬到」一致：選一選，按確定才真的加
+const addFor = ref(null)   // 要加入行程的項目
+const addTo = ref(null)    // { date, section, slot }
 function addToItinerary() {
   const it = itemMenu.value
   itemMenu.value = null
-  addFor.value = { item: it, date: (days.value.find(d => d.isToday) ?? days.value[0])?.date ?? '' }
+  addFor.value = it
+  addTo.value = { date: (days.value.find(d => d.isToday) ?? days.value[0])?.date ?? '', section: '', slot: '' }
 }
-function placeIntoItinerary(section, slot) {
-  const { item: it, date } = addFor.value
-  addEntry(entryFromItem(it, { tripId, date, section, slot }))
+// 日期有預設，時段／餐別沒有 —— 沒選就不給按，不然不知道要加到哪裡
+const addReady = computed(() => Boolean(addTo.value?.date && addTo.value?.slot))
+const addLabel = computed(() => {
+  const t = addTo.value
+  if (!addReady.value) return ''
+  const d = days.value.find(x => x.date === t.date)
+  const day = d ? `${d.date.slice(5).replace('-', '/')}（${d.weekday}）` : t.date
+  return `${day} ${[...SLOTS, ...MEALS].find(([k]) => k === t.slot)?.[1] ?? ''}`
+})
+function placeIntoItinerary() {
+  const { date, section, slot } = addTo.value
+  addEntry(entryFromItem(addFor.value, { tripId, date, section, slot }))
   addFor.value = null
   toast('已加入行程', { label: '前往', to: { path: `/trips/${tripId}`, query: { tab: 'itinerary' } } })
 }
@@ -280,25 +292,35 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       <PhPlus :size="26" weight="bold" />
     </button>
 
-    <!-- F-41：從清單加入行程，選日期再選時段或餐別 -->
-    <Sheet :open="!!addFor" :title="addFor ? `加入行程：${addFor.item.title}` : ''" @update:open="v => !v && (addFor = null)">
+    <!-- F-41：從清單加入行程。選日期與時段只是選起來，按下面那顆才真的加 -->
+    <Sheet :open="!!addFor" :title="addFor ? `加入行程：${addFor.title}` : ''" @update:open="v => !v && (addFor = null)">
       <div class="px-2 pb-2">
         <p class="mb-2 mt-1 text-[13px] font-semibold">日期</p>
         <div class="flex flex-wrap gap-2">
-          <button v-for="d in days" :key="d.date" :class="['chip-region', addFor?.date === d.date && 'on']"
-            @click="addFor = { ...addFor, date: d.date }">
+          <button v-for="d in days" :key="d.date" :class="['chip-region', addTo?.date === d.date && 'on']"
+            @click="addTo = { ...addTo, date: d.date }">
             {{ d.date.slice(5).replace('-', '/') }}（{{ d.weekday }}）
           </button>
         </div>
         <p class="mb-2 mt-4 text-[13px] font-semibold">時段</p>
         <div class="flex flex-wrap gap-2">
-          <button v-for="[slot, label] in SLOTS" :key="slot" class="chip-state" @click="placeIntoItinerary('schedule', slot)">{{ label }}</button>
+          <button v-for="[slot, label] in SLOTS" :key="slot"
+            :class="['chip-state', addTo?.section === 'schedule' && addTo?.slot === slot && 'on']"
+            @click="addTo = { ...addTo, section: 'schedule', slot }">{{ label }}</button>
         </div>
         <p class="mb-2 mt-4 text-[13px] font-semibold">餐別</p>
         <div class="flex flex-wrap gap-2">
-          <button v-for="[slot, label] in MEALS" :key="slot" class="chip-state" @click="placeIntoItinerary('meal', slot)">{{ label }}</button>
+          <button v-for="[slot, label] in MEALS" :key="slot"
+            :class="['chip-state', addTo?.section === 'meal' && addTo?.slot === slot && 'on']"
+            @click="addTo = { ...addTo, section: 'meal', slot }">{{ label }}</button>
         </div>
       </div>
+
+      <template #footer>
+        <button class="btn-primary w-full" :disabled="!addReady" @click="placeIntoItinerary">
+          {{ addReady ? `加到 ${addLabel}` : '選一個時段或餐別' }}
+        </button>
+      </template>
     </Sheet>
 
     <!-- 篩選抽屜：chips 換行並排，不橫向捲動 -->
