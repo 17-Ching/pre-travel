@@ -48,33 +48,42 @@ const tagNames = computed(() => [...new Set(scoped.value.flatMap(i => i.tagIds.m
 
 const STATUS = { shopping: [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買到']], place: [['unvisited', '未去'], ['visited', '已去過']] }
 const ORDER = { todo: 0, not_found: 1, bought: 2 }
+// 地區與標籤都是複選：同一組之內是「或」（選了東京和大阪＝兩邊都看得到），
+// 組與組之間仍然是「且」。沒選＝不篩，不是「都不符合」。
+// 未分類用 'none' 當假 id 混在 regions 裡，不用再開一個欄位記它。
+const toggleIn = (arr, v) => { const i = arr.indexOf(v); i < 0 ? arr.push(v) : arr.splice(i, 1) }
+const tagNameOf = id => store.tags.find(g => g.id === id)?.name
+
 const filtered = computed(() => scoped.value.filter(i =>
-  (p.region === 'all' || (p.region === 'none' ? !i.regionId : i.regionId === p.region)) &&
+  (!p.regions.length || p.regions.includes(i.regionId ?? 'none')) &&
   (!p.status || (p.type === 'shopping' ? i.status === p.status : (p.status === 'visited') === i.visited)) &&
-  (!p.tag || i.tagIds.some(id => store.tags.find(g => g.id === id)?.name === p.tag)) &&
+  (!p.tags.length || i.tagIds.some(id => p.tags.includes(tagNameOf(id)))) &&
   (!p.q || [i.title, i.note, i.plannedStore].join(' ').toLowerCase().includes(p.q.toLowerCase())),
 ).sort((a, b) => (p.type === 'shopping' ? ORDER[a.status] - ORDER[b.status] : a.visited - b.visited) || b.createdAt.localeCompare(a.createdAt)))
 
-const groups = computed(() => p.region !== 'all'
-  ? [{ key: 'flat', items: filtered.value }]
-  : [...regions.value.map(r => ({ key: r.id, name: r.name, items: filtered.value.filter(i => i.regionId === r.id) })),
-     { key: 'none', name: '未分類', items: filtered.value.filter(i => !i.regionId) }].filter(g => g.items.length))
+// 一律照地區分組。以前只篩一個地區時會改成無標題的平鋪，但複選兩個地區時平鋪就
+// 看不出哪筆屬於哪一區了；空的組本來就會被濾掉，所以只選一個時結果一樣乾淨。
+const groups = computed(() =>
+  [...regions.value.map(r => ({ key: r.id, name: r.name, items: filtered.value.filter(i => i.regionId === r.id) })),
+   { key: 'none', name: '未分類', items: filtered.value.filter(i => !i.regionId) }].filter(g => g.items.length))
 const done = computed(() => scoped.value.filter(i => (p.type === 'shopping' ? i.status === 'bought' : i.visited)).length)
-const hasFilter = computed(() => p.region !== 'all' || p.status || p.tag || p.q)
+const hasFilter = computed(() => p.regions.length || p.status || p.tags.length || p.q)
 
 const showSearch = ref(!!p.q), menu = ref(false), statusFor = ref(null), itemMenu = ref(null), filterOpen = ref(false)
 
 // 已套用的篩選，攤平成一串好顯示、每個都能單獨取消
 const activeFilters = computed(() => {
   const out = []
-  if (p.region !== 'all') out.push({ k: 'region', label: p.region === 'none' ? '未分類' : regions.value.find(r => r.id === p.region)?.name ?? '', clear: () => (p.region = 'all') })
+  for (const id of p.regions) {
+    out.push({ k: 'region-' + id, label: id === 'none' ? '未分類' : regions.value.find(r => r.id === id)?.name ?? '', clear: () => toggleIn(p.regions, id) })
+  }
   if (p.status) out.push({ k: 'status', label: STATUS[p.type].find(([k]) => k === p.status)?.[1] ?? '', clear: () => (p.status = '') })
-  if (p.tag) out.push({ k: 'tag', label: p.tag, clear: () => (p.tag = '') })
+  for (const n of p.tags) out.push({ k: 'tag-' + n, label: n, clear: () => toggleIn(p.tags, n) })
   if (p.q) out.push({ k: 'q', label: `「${p.q}」`, clear: () => { p.q = ''; showSearch.value = false } })
   return out
 })
 
-function clearFilters() { Object.assign(p, { region: 'all', status: '', tag: '', q: '' }); showSearch.value = false }
+function clearFilters() { Object.assign(p, { regions: [], status: '', tags: [], q: '' }); showSearch.value = false }
 function setType(type) {
   if (p.type === type) return
   p.type = type
@@ -100,7 +109,12 @@ watch(headEl, el => {
 onUnmounted(() => ro?.disconnect())
 function toggle(key, v) { p[key] = p[key] === v ? '' : v }
 function toggleSearch() { showSearch.value = !showSearch.value; if (!showSearch.value) p.q = '' }
-function add() { store.offline ? toast('需要網路') : router.push({ path: `/trips/${tripId}/items/new`, query: { type: p.type, region: p.region } }) }
+// 只篩一個地區時，新增的項目預設就填那一區；篩多區或沒篩就不猜
+function add() {
+  if (store.offline) return toast('需要網路')
+  const only = p.regions.length === 1 ? p.regions[0] : ''
+  router.push({ path: `/trips/${tripId}/items/new`, query: { type: p.type, region: only } })
+}
 function pickStatus(s) { setStatus(statusFor.value, { status: s }); statusFor.value = null }
 
 // F-12 複製 / F-17 刪除。離線時只允許切換狀態（F-33），其餘寫入一律擋掉。
@@ -338,9 +352,10 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 
         <h3 class="mb-2 text-[15px] font-semibold">地區</h3>
         <div class="flex flex-wrap gap-2">
-          <button :class="['chip-region', p.region === 'all' && 'on']" @click="p.region = 'all'">全部</button>
-          <button v-for="r in regions" :key="r.id" :class="['chip-region', p.region === r.id && 'on']" @click="p.region = r.id">{{ r.name }}</button>
-          <button :class="['chip-region', p.region === 'none' && 'on']" @click="p.region = 'none'">未分類</button>
+          <!-- 複選。「全部」是清空，不是另一個選項，所以沒選任何一個時它就是亮的 -->
+          <button :class="['chip-region', !p.regions.length && 'on']" @click="p.regions = []">全部</button>
+          <button v-for="r in regions" :key="r.id" :class="['chip-region', p.regions.includes(r.id) && 'on']" @click="toggleIn(p.regions, r.id)">{{ r.name }}</button>
+          <button :class="['chip-region', p.regions.includes('none') && 'on']" @click="toggleIn(p.regions, 'none')">未分類</button>
         </div>
 
         <h3 class="mb-2 mt-5 text-[15px] font-semibold">{{ p.type === 'shopping' ? '購買狀態' : '去過了嗎' }}</h3>
@@ -351,7 +366,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         <template v-if="tagNames.length">
           <h3 class="mb-2 mt-5 text-[15px] font-semibold">標籤</h3>
           <div class="flex flex-wrap gap-2">
-            <button v-for="n in tagNames" :key="n" :class="['chip-tag', tagColor(n), p.tag === n && 'on']" @click="toggle('tag', n)">{{ n }}</button>
+            <button v-for="n in tagNames" :key="n" :class="['chip-tag', tagColor(n), p.tags.includes(n) && 'on']" @click="toggleIn(p.tags, n)">{{ n }}</button>
           </div>
         </template>
       </div>

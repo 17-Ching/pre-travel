@@ -164,7 +164,24 @@ export const myTags = tripId => store.tags.filter(g => g.tripId === tripId && g.
 export const tagUsage = g => store.items.filter(i => i.tagIds.includes(g.id)).length
 export const item = id => store.items.find(i => i.id === id)
 // F-09：分頁只有願望清單／行程兩個，看誰的清單是清單裡的第二層（who）
-export const prefs = tripId => (store.prefs[tripId] ??= { tab: 'list', who: 'me', type: 'place', region: 'all', status: '', tag: '', q: '' })
+//
+// 逐個欄位補預設而不是整包 ??=：prefs 是存在 localStorage 的，舊版存檔少的是「某幾個
+// 欄位」而不是整筆，整包補的話既有使用者永遠拿不到新欄位。
+export function prefs(tripId) {
+  const p = (store.prefs[tripId] ??= {})
+  p.tab ??= 'list'
+  p.who ??= 'me'
+  p.type ??= 'place'
+  p.status ??= ''
+  p.q ??= ''
+  // 地區與標籤改成複選。舊存檔是單選字串（region 是 'all' | id | 'none'，tag 是 '' | 名稱），
+  // 不轉的話 includes() 會拿字串當陣列用，篩選整個壞掉。空陣列 = 不篩。
+  if (!Array.isArray(p.regions)) p.regions = p.region && p.region !== 'all' ? [p.region] : []
+  if (!Array.isArray(p.tags)) p.tags = p.tag ? [p.tag] : []
+  delete p.region
+  delete p.tag
+  return p
+}
 const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 
 // ---- 載入
