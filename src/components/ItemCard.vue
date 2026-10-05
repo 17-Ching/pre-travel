@@ -1,7 +1,8 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { PhMapPin, PhShoppingBag, PhCheck, PhDotsThreeVertical } from '@phosphor-icons/vue'
-import { store, user, sourceLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
+import { PhMapPin, PhShoppingBag, PhCheck, PhDotsThreeVertical, PhYoutubeLogo, PhInstagramLogo, PhThreadsLogo,
+  PhFacebookLogo, PhXLogo, PhLink } from '@phosphor-icons/vue'
+import { store, user, sourceLabel, linkLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
 import TagChip from './TagChip.vue'
 import Avatar from './Avatar.vue'
 
@@ -23,6 +24,13 @@ const source = computed(() => {
 })
 const STATUS = { todo: '未買', bought: '已買', not_found: '沒買到' }
 
+// 參考（影片、貼文）。沒有縮圖、沒有狀態要勾，最重要的動作是「去看那支」，
+// 所以每個連結直接攤成一顆可以點的按鈕，不用先進詳情頁再找連結。
+// 圖示依來源分，認不出來的就用一般連結圖示；判斷沿用 sourceLabel，不另寫一套。
+const isRef = computed(() => props.item.type === 'reference')
+const SOURCE_ICON = { YouTube: PhYoutubeLogo, IG: PhInstagramLogo, Threads: PhThreadsLogo, Facebook: PhFacebookLogo, X: PhXLogo, Maps: PhMapPin }
+const sourceIcon = url => SOURCE_ICON[sourceLabel(url)] ?? PhLink
+
 // 勾選的觸覺回饋：只是 240ms 的 scale，不擋寫入（F-19 樂觀更新）。
 const popping = ref(false)
 function fire(evt) {
@@ -33,7 +41,31 @@ function fire(evt) {
 </script>
 
 <template>
-  <article :class="['card flex gap-3 p-3 transition duration-200', done ? 'opacity-55' : 'shadow-e1']">
+  <article v-if="isRef" class="card p-3 shadow-e1">
+    <div class="flex items-start gap-2">
+      <RouterLink :to="`/trips/${item.tripId}/items/${item.id}`" class="min-w-0 flex-1">
+        <h3 class="line-clamp-2 text-[16px] font-semibold leading-[1.35] tracking-tight wrap-anywhere">{{ item.title }}</h3>
+        <p v-if="item.note" class="mt-1 line-clamp-2 whitespace-pre-line text-[13px] leading-relaxed text-muted">{{ item.note }}</p>
+      </RouterLink>
+      <button class="icon-btn size-8 shrink-0 text-muted" aria-label="更多動作" @click="$emit('menu')">
+        <PhDotsThreeVertical :size="18" weight="bold" />
+      </button>
+    </div>
+    <!-- 真的 <a>：手機上 YT / IG 連結要能直接跳進 App -->
+    <div v-if="links.length" class="mt-2.5 flex flex-wrap gap-1.5">
+      <a v-for="l in links" :key="l.id" :href="l.url" target="_blank" rel="noopener"
+        class="inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2 px-3 text-[13px] font-medium transition active:scale-95">
+        <component :is="sourceIcon(l.url)" :size="15" weight="fill" class="shrink-0 text-tint" />
+        <span class="truncate">{{ linkLabel(l) }}</span>
+      </a>
+    </div>
+    <div v-if="region || tags.length" class="mt-2 flex flex-wrap gap-1.5">
+      <span v-if="region" class="inline-flex h-[22px] items-center rounded-md bg-tint-soft px-1.5 text-[11px] font-medium text-tint">{{ region }}</span>
+      <TagChip v-for="n in tags" :key="n" :name="n" />
+    </div>
+  </article>
+
+  <article v-else :class="['card flex gap-3 p-3 transition duration-200', done ? 'opacity-55' : 'shadow-e1']">
     <RouterLink :to="`/trips/${item.tripId}/items/${item.id}`" class="flex min-w-0 flex-1 gap-3">
       <div class="relative size-[88px] shrink-0">
         <img v-if="imageOk(thumb)" :src="thumb" alt="" loading="lazy" class="size-full rounded-[10px] bg-line object-cover" @error="imageBroken(thumb)" />

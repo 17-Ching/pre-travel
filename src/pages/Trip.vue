@@ -47,6 +47,10 @@ const scoped = computed(() => store.items.filter(i => i.tripId === tripId && i.o
 const tagNames = computed(() => [...new Set(scoped.value.flatMap(i => i.tagIds.map(id => store.tags.find(g => g.id === id)?.name)).filter(Boolean))])
 
 const STATUS = { shopping: [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買到']], place: [['unvisited', '未去'], ['visited', '已去過']] }
+// 參考（影片、貼文）沒有完成狀態：看過了不代表就沒用了。所以它沒有狀態篩選、
+// 沒有進度條、segment 上只顯示數量。下面凡是查 STATUS[p.type] 的地方都要擋這個情況。
+const TYPES = [['place', '地點'], ['shopping', '購物'], ['reference', '參考']]
+const hasStatus = computed(() => Boolean(STATUS[p.type]))
 const ORDER = { todo: 0, not_found: 1, bought: 2 }
 // 地區與標籤都是複選：同一組之內是「或」（選了東京和大阪＝兩邊都看得到），
 // 組與組之間仍然是「且」。沒選＝不篩，不是「都不符合」。
@@ -77,7 +81,7 @@ const activeFilters = computed(() => {
   for (const id of p.regions) {
     out.push({ k: 'region-' + id, label: id === 'none' ? '未分類' : regions.value.find(r => r.id === id)?.name ?? '', clear: () => toggleIn(p.regions, id) })
   }
-  if (p.status) out.push({ k: 'status', label: STATUS[p.type].find(([k]) => k === p.status)?.[1] ?? '', clear: () => (p.status = '') })
+  if (p.status) out.push({ k: 'status', label: STATUS[p.type]?.find(([k]) => k === p.status)?.[1] ?? '', clear: () => (p.status = '') })
   for (const n of p.tags) out.push({ k: 'tag-' + n, label: n, clear: () => toggleIn(p.tags, n) })
   if (p.q) out.push({ k: 'q', label: `「${p.q}」`, clear: () => { p.q = ''; showSearch.value = false } })
   return out
@@ -230,20 +234,22 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 
       <!-- 行程分頁有自己的日期列與版面，下面這整塊是願望清單專用 -->
       <div v-if="!onItinerary" class="gutter pb-2 pt-2">
-        <div class="relative grid grid-cols-2 rounded-[12px] bg-surface-2 p-1">
-          <div class="absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
-            :style="{ transform: p.type === 'shopping' ? 'translateX(100%)' : 'none' }" aria-hidden="true" />
-          <button v-for="[k, l] in [['place', '地點'], ['shopping', '購物']]" :key="k"
+        <!-- 滑塊寬度＝(容器扣掉左右 padding) / 3，位移是自己寬度的整數倍 -->
+        <div class="relative grid grid-cols-3 rounded-[12px] bg-surface-2 p-1">
+          <div class="absolute inset-y-1 left-1 w-[calc((100%-0.5rem)/3)] rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
+            :style="{ transform: `translateX(${TYPES.findIndex(([k]) => k === p.type) * 100}%)` }" aria-hidden="true" />
+          <button v-for="[k, l] in TYPES" :key="k"
             :class="['relative z-10 flex h-8 items-center justify-center gap-1.5 rounded-[9px] text-[14px] font-semibold transition-colors duration-150', p.type === k ? 'text-ink' : 'text-muted']"
             @click="setType(k)">
             {{ l }}
-            <span v-if="tally(k).total" class="text-[12px] font-normal tabular-nums opacity-70">{{ tally(k).done }}/{{ tally(k).total }}</span>
+            <!-- 參考沒有「完成」，只顯示數量 -->
+            <span v-if="tally(k).total" class="text-[12px] font-normal tabular-nums opacity-70">{{ STATUS[k] ? `${tally(k).done}/${tally(k).total}` : tally(k).total }}</span>
           </button>
         </div>
       </div>
 
       <div v-if="!onItinerary" class="h-px w-full bg-line">
-        <div v-if="scoped.length" class="h-px bg-accent transition-[width] duration-200 ease-out"
+        <div v-if="scoped.length && hasStatus" class="h-px bg-accent transition-[width] duration-200 ease-out"
           :style="{ width: (done / scoped.length) * 100 + '%' }" role="progressbar" :aria-valuenow="done" :aria-valuemax="scoped.length"
           :aria-label="`${p.type === 'shopping' ? '已買' : '已去'} ${done} / ${scoped.length}`" />
       </div>
@@ -275,7 +281,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         <RouterLink :to="`/trips/${tripId}/regions`" class="btn-primary mt-6">新增地區</RouterLink>
       </div>
       <div v-else-if="!scoped.length" class="mt-14 text-center">
-        <p class="text-[17px] font-semibold">{{ p.type === 'shopping' ? '還沒有購物項目' : '還沒有地點' }}</p>
+        <p class="text-[17px] font-semibold">{{ { place: '還沒有地點', shopping: '還沒有購物項目', reference: '還沒有參考連結' }[p.type] }}</p>
         <p class="mt-1.5 text-[14px] text-muted">{{ editable ? '按右下角的加號新增第一個。' : '這個分頁還沒有內容。' }}</p>
       </div>
       <div v-else-if="!filtered.length" class="mt-14 text-center">
@@ -358,10 +364,12 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
           <button :class="['chip-region', p.regions.includes('none') && 'on']" @click="toggleIn(p.regions, 'none')">未分類</button>
         </div>
 
-        <h3 class="mb-2 mt-5 text-[15px] font-semibold">{{ p.type === 'shopping' ? '購買狀態' : '去過了嗎' }}</h3>
-        <div class="flex flex-wrap gap-2">
-          <button v-for="[k, l] in STATUS[p.type]" :key="k" :class="['chip-state', p.status === k && 'on']" @click="toggle('status', k)">{{ l }}</button>
-        </div>
+        <template v-if="hasStatus">
+          <h3 class="mb-2 mt-5 text-[15px] font-semibold">{{ p.type === 'shopping' ? '購買狀態' : '去過了嗎' }}</h3>
+          <div class="flex flex-wrap gap-2">
+            <button v-for="[k, l] in STATUS[p.type]" :key="k" :class="['chip-state', p.status === k && 'on']" @click="toggle('status', k)">{{ l }}</button>
+          </div>
+        </template>
 
         <template v-if="tagNames.length">
           <h3 class="mb-2 mt-5 text-[15px] font-semibold">標籤</h3>

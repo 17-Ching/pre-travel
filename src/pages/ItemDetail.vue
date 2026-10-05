@@ -124,7 +124,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
 
 <template>
   <template v-if="it">
-    <TopBar :title="it.type === 'place' ? '地點' : '購物'" back>
+    <TopBar :title="{ place: '地點', shopping: '購物', reference: '參考' }[it.type]" back>
       <button class="icon-btn" aria-label="複製到…" @click="copying = true"><PhCopy :size="22" /></button>
       <template v-if="editable && !store.offline">
         <RouterLink :to="`/trips/${tripId}/items/${it.id}/edit`" class="icon-btn" aria-label="編輯"><PhPencilSimple :size="22" /></RouterLink>
@@ -168,7 +168,8 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
           <div v-if="region" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">地區</dt><dd>{{ region }}</dd></div>
           <div v-if="tags.length" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">標籤</dt><dd class="flex flex-wrap gap-1"><TagChip v-for="n in tags" :key="n" :name="n" /></dd></div>
           <div v-if="it.type === 'shopping' && it.plannedStore" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">預計購買</dt><dd>{{ it.plannedStore }}</dd></div>
-          <div class="flex items-center gap-4">
+          <!-- 參考沒有完成狀態：看過了不代表就沒用了 -->
+          <div v-if="it.type !== 'reference'" class="flex items-center gap-4">
             <dt class="w-20 shrink-0 text-muted">{{ it.type === 'shopping' ? '狀態' : '去過了嗎' }}</dt>
             <dd>
               <div v-if="it.type === 'shopping'" class="flex gap-1.5">

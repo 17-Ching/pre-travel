@@ -11,7 +11,15 @@ import TopBar from '../components/TopBar.vue'
 const route = useRoute(), router = useRouter()
 const tripId = route.params.tripId
 const existing = route.params.itemId ? getItem(route.params.itemId) : null
-const type = existing?.type ?? (route.query.type === 'shopping' ? 'shopping' : 'place')
+// 三種子清單各自的字眼。用白名單讀 query：網址可以被手改，認不得的一律當地點
+const KIND = {
+  place: { label: '地點', title: '店名或景點名稱', link: '貼上 Google Maps、IG 或網頁連結', note: '營業時間、要點什麼、注意事項…' },
+  shopping: { label: '購物', title: '想買的東西', link: '貼上 Google Maps、IG 或網頁連結', note: '營業時間、要點什麼、注意事項…' },
+  reference: { label: '參考', title: '影片或貼文（例：京都 3 天 2 夜 vlog）', link: '貼上 YouTube、IG、Threads 連結', note: '想參考的段落、時間點、拍攝角度…' },
+}
+const type = existing?.type ?? (KIND[route.query.type] ? route.query.type : 'place')
+// 參考不放圖：使用者要的是「點了去看那支影片」，卡片上也沒有縮圖格
+const isRef = type === 'reference'
 const qRegion = route.query.region
 const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
   // v2.0：共同分頁移除（Q8），項目一定進自己的清單分頁
@@ -42,8 +50,9 @@ async function onUrl(l) {
   const d = await load(l)
   if (!d) return
   if (!f.value.title.trim()) f.value.title = d.title
-  // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）
-  if (d.image && !f.value.images.length) {
+  // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）。
+  // 參考不轉存：沒有地方顯示，上傳了只是佔 bucket 空間，之後還得靠孤兒檔掃描清掉
+  if (d.image && !isRef && !f.value.images.length) {
     try { f.value.images.push(track(await uploadImageFromDataUrl(tripId, d.image))) } catch { /* 有標題就夠用了 */ }
   }
 }
@@ -102,11 +111,11 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
 </script>
 
 <template>
-  <TopBar :title="(existing ? '編輯' : '新增') + (type === 'place' ? '地點' : '購物')" back />
+  <TopBar :title="(existing ? '編輯' : '新增') + KIND[type].label" back />
   <main class="grid gap-5 px-4 pb-32 pt-2">
     <div>
       <label class="label" for="title">標題</label>
-      <input id="title" v-model="f.title" class="input" maxlength="100" :placeholder="type === 'place' ? '店名或景點名稱' : '想買的東西'" />
+      <input id="title" v-model="f.title" class="input" maxlength="100" :placeholder="KIND[type].title" />
     </div>
 
     <div>
@@ -117,7 +126,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
             <input v-model="l.title" class="input h-9 min-w-0 flex-1" maxlength="40" placeholder="連結標題（選填）" />
             <button class="icon-btn size-8 shrink-0 text-muted" aria-label="移除這個連結" @click="removeLink(i)"><PhX :size="16" /></button>
           </div>
-          <input v-model="l.url" type="url" inputmode="url" class="input mt-2 h-9" placeholder="貼上 Google Maps、IG 或網頁連結"
+          <input v-model="l.url" type="url" inputmode="url" class="input mt-2 h-9" :placeholder="KIND[type].link"
             @blur="onUrl(l)" @paste="onPaste(l)" />
           <p v-if="previews[l.id]?.state === 'loading'" class="mt-1.5 px-1 text-[12px] text-muted">正在取得預覽…</p>
           <p v-else-if="previews[l.id]?.state === 'fail'" class="mt-1.5 px-1 text-[12px] text-danger">無法取得預覽，可以手動填標題</p>
@@ -133,7 +142,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
 
     </div>
 
-    <div>
+    <div v-if="!isRef">
       <span class="label">圖片（最多 5 張）</span>
       <div class="grid grid-cols-4 gap-2">
         <div v-for="(im, i) in f.images" :key="im.url" class="relative">
@@ -185,7 +194,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
 
     <div>
       <label class="label" for="note">備註</label>
-      <textarea id="note" v-model="f.note" class="input h-32 resize-y py-2.5" maxlength="2000" placeholder="營業時間、要點什麼、注意事項…" />
+      <textarea id="note" v-model="f.note" class="input h-32 resize-y py-2.5" maxlength="2000" :placeholder="KIND[type].note" />
     </div>
   </main>
 
