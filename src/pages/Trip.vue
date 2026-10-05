@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
   PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks } from '@phosphor-icons/vue'
 import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatus, copyItem, deleteItem, toast, now, fmtTime, tagColor, sourceLabel, linkLabel,
-  tripDays, addEntry, entryFromItem, scheduledSlots } from '../store'
+  tripDays, addEntry, entryFromItem, scheduledSlots, tagScope } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
 import LoadState from '../components/LoadState.vue'
@@ -65,11 +65,24 @@ const filtered = computed(() => scoped.value.filter(i =>
   (!p.q || [i.title, i.note, i.plannedStore].join(' ').toLowerCase().includes(p.q.toLowerCase())),
 ).sort((a, b) => (p.type === 'shopping' ? ORDER[a.status] - ORDER[b.status] : a.visited - b.visited) || b.createdAt.localeCompare(a.createdAt)))
 
-// 一律照地區分組。以前只篩一個地區時會改成無標題的平鋪，但複選兩個地區時平鋪就
-// 看不出哪筆屬於哪一區了；空的組本來就會被濾掉，所以只選一個時結果一樣乾淨。
-const groups = computed(() =>
-  [...regions.value.map(r => ({ key: r.id, name: r.name, items: filtered.value.filter(i => i.regionId === r.id) })),
-   { key: 'none', name: '未分類', items: filtered.value.filter(i => !i.regionId) }].filter(g => g.items.length))
+// 地點與購物照地區分組。以前只篩一個地區時會改成無標題的平鋪，但複選兩個地區時平鋪
+// 就看不出哪筆屬於哪一區了；空的組本來就會被濾掉，所以只選一個時結果一樣乾淨。
+//
+// 參考照標籤分組：要拍的 reels 大多沒有地區，照地區分會全擠在「未分類」一組。
+// 一筆有兩個標籤就兩組都出現 —— 一支同時是轉場與拍食物的 reel 對兩個分類都有用，
+// 只放「第一個標籤」那組會很隨機。正在篩標籤時只列被選的那幾組，不然篩「轉場」
+// 還會冒出一組「拍食物」（因為那筆兩個都有）。組名排序固定，新增項目時組不會跳來跳去。
+const groups = computed(() => {
+  const keep = g => g.items.length
+  if (p.type !== 'reference') {
+    return [...regions.value.map(r => ({ key: r.id, name: r.name, items: filtered.value.filter(i => i.regionId === r.id) })),
+      { key: 'none', name: '未分類', items: filtered.value.filter(i => !i.regionId) }].filter(keep)
+  }
+  const names = (p.tags.length ? tagNames.value.filter(n => p.tags.includes(n)) : tagNames.value)
+    .slice().sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+  return [...names.map(n => ({ key: 'tag-' + n, name: n, items: filtered.value.filter(i => i.tagIds.some(id => tagNameOf(id) === n)) })),
+    { key: 'untagged', name: '沒有標籤', items: filtered.value.filter(i => !i.tagIds.some(tagNameOf)) }].filter(keep)
+})
 const done = computed(() => scoped.value.filter(i => (p.type === 'shopping' ? i.status === 'bought' : i.visited)).length)
 const hasFilter = computed(() => p.regions.length || p.status || p.tags.length || p.q)
 
@@ -90,6 +103,9 @@ const activeFilters = computed(() => {
 function clearFilters() { Object.assign(p, { regions: [], status: '', tags: [], q: '' }); showSearch.value = false }
 function setType(type) {
   if (p.type === type) return
+  // 跨池（地點/購物 ↔ 參考）時清掉標籤篩選：兩池的標籤各自獨立，帶過去的話會拿
+  // 地點的「拉麵」去篩參考，結果整片空白，篩選抽屜裡又看不到那顆可以取消。
+  if (tagScope(type) !== tagScope(p.type)) p.tags = []
   p.type = type
   p.status = ''
   // 換子清單等於整份內容換掉，停在原本的捲動位置會落在不相干的地方（而且兩邊項目數

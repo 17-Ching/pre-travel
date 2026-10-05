@@ -2,7 +2,7 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhX, PhLink, PhImage, PhPlus } from '@phosphor-icons/vue'
-import { store, item as getItem, regionsOf, myTags, ensureTag, addRegion, saveItem, fetchPreview, tagColor, toast,
+import { store, item as getItem, regionsOf, myTags, tagScope, ensureTag, addRegion, saveItem, fetchPreview, tagColor, toast,
   uploadItemImage, uploadImageFromDataUrl, MAX_LINKS, newLink, sourceLabel, thumbOf, sweepImages } from '../store'
 import { imagePaths } from '../image-rules'
 import { useLinkPreview } from '../link-preview'
@@ -15,7 +15,8 @@ const existing = route.params.itemId ? getItem(route.params.itemId) : null
 const KIND = {
   place: { label: '地點', title: '店名或景點名稱', link: '貼上 Google Maps、IG 或網頁連結', note: '營業時間、要點什麼、注意事項…' },
   shopping: { label: '購物', title: '想買的東西', link: '貼上 Google Maps、IG 或網頁連結', note: '營業時間、要點什麼、注意事項…' },
-  reference: { label: '參考', title: '影片或貼文（例：京都 3 天 2 夜 vlog）', link: '貼上 YouTube、IG、Threads 連結', note: '想參考的段落、時間點、拍攝角度…' },
+  reference: { label: '參考', title: '影片或貼文（例：京都 3 天 2 夜 vlog）', link: '貼上 YouTube、IG、Threads 連結', note: '想參考的段落、時間點、拍攝角度…',
+    tag: '輸入分類，例：轉場影片、拍食物' },
 }
 const type = existing?.type ?? (KIND[route.query.type] ? route.query.type : 'place')
 // 參考不放圖：使用者要的是「點了去看那支影片」，卡片上也沒有縮圖格
@@ -29,10 +30,12 @@ const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
 })
 
 const regions = computed(() => regionsOf(tripId))
-const tags = computed(() => myTags(tripId))
+// 參考用自己那一池標籤，地點與購物共用另一池
+const scope = tagScope(type)
+const tags = computed(() => myTags(tripId, scope))
 const tagInput = ref('')
 const tagExists = computed(() => tags.value.some(g => g.name === tagInput.value.trim()))
-function addTag() { const g = ensureTag(tripId, tagInput.value); if (g && !f.value.tagIds.includes(g.id)) f.value.tagIds.push(g.id); tagInput.value = '' }
+function addTag() { const g = ensureTag(tripId, tagInput.value, scope); if (g && !f.value.tagIds.includes(g.id)) f.value.tagIds.push(g.id); tagInput.value = '' }
 function toggleTag(id) { const i = f.value.tagIds.indexOf(id); i < 0 ? f.value.tagIds.push(id) : f.value.tagIds.splice(i, 1) }
 function onRegion(e) {
   if (e.target.value !== '__new') return (f.value.regionId = e.target.value || null)
@@ -175,7 +178,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
         <button v-for="g in tags" :key="g.id" @click="toggleTag(g.id)"
           :class="['h-7 rounded-full border px-2.5 text-[13px] font-medium transition', f.tagIds.includes(g.id) ? tagColor(g.name) + ' border-transparent' : 'border-line bg-card text-muted']">{{ g.name }}</button>
       </div>
-      <input id="tag" v-model="tagInput" class="input" maxlength="20" placeholder="輸入新標籤，按 Enter 建立" @keydown.enter.prevent="tagInput.trim() && addTag()" />
+      <input id="tag" v-model="tagInput" class="input" maxlength="20" :placeholder="KIND[type].tag ?? '輸入新標籤，按 Enter 建立'" @keydown.enter.prevent="tagInput.trim() && addTag()" />
       <button v-if="tagInput.trim() && !tagExists" class="mt-2 text-[13px] font-medium text-accent" @click="addTag">建立「{{ tagInput.trim() }}」</button>
     </div>
 

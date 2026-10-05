@@ -160,7 +160,12 @@ export const myTrips = () => store.trips
   .sort((a, b) => (a.start || '9999').localeCompare(b.start || '9999'))
 export const regionsOf = tripId => store.regions.filter(r => r.tripId === tripId).sort((a, b) => a.order - b.order)
 export const regionItemCount = r => store.items.filter(i => i.regionId === r.id).length
-export const myTags = tripId => store.tags.filter(g => g.tripId === tripId && g.userId === store.me)
+// 標籤分兩池：地點與購物共用一池（'default'），參考自己一池（'reference'）。
+// 參考的分類是「轉場影片」「拍食物」這種，跟景點的「拉麵」「必去」不是同一回事，
+// 混在一起兩邊的選單都會塞滿用不到的選項。同名標籤在兩池各自獨立。
+export const tagScope = type => (type === 'reference' ? 'reference' : 'default')
+export const myTags = (tripId, scope = 'default') =>
+  store.tags.filter(g => g.tripId === tripId && g.userId === store.me && g.scope === scope)
 export const tagUsage = g => store.items.filter(i => i.tagIds.includes(g.id)).length
 export const item = id => store.items.find(i => i.id === id)
 // F-09：分頁只有願望清單／行程兩個，看誰的清單是清單裡的第二層（who）
@@ -493,17 +498,17 @@ export function deleteRegion(r) {
   })
 }
 
-// ---- tags (F-22: per user × trip, max 50)
-export function ensureTag(tripId, name) {
+// ---- tags (F-22: per user × trip, max 50；兩池各自算 50)
+export function ensureTag(tripId, name, scope = 'default') {
   name = name.trim().slice(0, 20)
   if (!name) return null
-  const mine = myTags(tripId)
+  const mine = myTags(tripId, scope)
   const found = mine.find(g => g.name === name)
   if (found) return found
   if (mine.length >= 50) { toast('每個專案最多 50 個標籤'); return null }
-  const g = reactive({ id: uid(), tripId, userId: store.me, name })
+  const g = reactive({ id: uid(), tripId, userId: store.me, name, scope })
   store.tags.push(g)
-  push(() => api.addTag(tripId, store.me, name, g.id), () => {
+  push(() => api.addTag(tripId, store.me, name, g.id, scope), () => {
     const i = store.tags.indexOf(g)
     if (i >= 0) store.tags.splice(i, 1)
   })
@@ -512,7 +517,7 @@ export function ensureTag(tripId, name) {
 export function renameTag(g, name) {
   name = name.trim().slice(0, 20)
   if (!name || name === g.name) return
-  if (myTags(g.tripId).some(x => x.name === name && x.id !== g.id)) return toast('已有同名標籤')
+  if (myTags(g.tripId, g.scope).some(x => x.name === name && x.id !== g.id)) return toast('已有同名標籤')
   const before = g.name
   g.name = name
   push(() => api.renameTag(g.id, name), () => { g.name = before })
@@ -581,7 +586,8 @@ export function deleteItem(id) {
 export function copyItem(src) {
   const tagIds = src.tagIds
     .map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean)
-    .map(n => ensureTag(src.tripId, n)?.id).filter(Boolean)
+    // 對應到「自己同一池」的標籤：複製別人的參考，標籤要進我的參考池，不是地點池
+    .map(n => ensureTag(src.tripId, n, tagScope(src.type))?.id).filter(Boolean)
   const clone = JSON.parse(JSON.stringify(src))
   delete clone.id
   return saveItem({ ...clone, ownerUserId: store.me, tagIds, visited: false, status: 'todo' })

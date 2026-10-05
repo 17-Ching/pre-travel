@@ -24,7 +24,8 @@ const toMember = r => ({
   joinedAt: r.joined_at, leftAt: r.left_at,
 })
 const toRegion = r => ({ id: r.id, tripId: r.trip_id, name: r.name, order: r.sort_order })
-const toTag = r => ({ id: r.id, tripId: r.trip_id, userId: r.user_id, name: r.name })
+// scope 沒值就當 default：欄位加上去之前的資料、以及 migration 跑完前的讀取都不會壞
+const toTag = r => ({ id: r.id, tripId: r.trip_id, userId: r.user_id, name: r.name, scope: r.scope ?? 'default' })
 const toInvite = r => ({
   id: r.id, tripId: r.trip_id, token: r.token, createdBy: r.created_by,
   expiresAt: r.expires_at, revokedAt: r.revoked_at,
@@ -227,9 +228,9 @@ export async function deleteRegion(id) {
 }
 
 // ---- 標籤 ----
-export async function addTag(tripId, userId, name, id) {
+export async function addTag(tripId, userId, name, id, scope = 'default') {
   const { data, error } = await sb().from('tags')
-    .insert({ id, trip_id: tripId, user_id: userId, name }).select().single()
+    .insert({ id, trip_id: tripId, user_id: userId, name, scope }).select().single()
   if (error) throw new Error(error.code === '23505' ? '已有同名標籤' : '新增標籤失敗：' + error.message)
   return toTag(data)
 }
