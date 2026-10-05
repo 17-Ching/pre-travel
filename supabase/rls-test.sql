@@ -182,6 +182,21 @@ do $$ begin
     '觸發器蓋上真正的修改者，不靠前端自己填');
 end $$;
 
+-- 第三種子清單「參考」：權限跟 place / shopping 完全一樣，只是多一個合法的 type。
+-- 驗完就刪掉，後面好幾條斷言是數 items 的總筆數，留著會讓它們全部要改數字。
+insert into items (trip_id, owner_user_id, type, title, created_by)
+  values (:'trip_id', :'ruby', 'reference', '京都兩天一夜 vlog', :'ruby');
+do $$ begin
+  perform ok((select count(*) from items where type = 'reference') = 1,
+    '可以新增參考類型的項目');
+end $$;
+-- 放寬 CHECK 之後，亂填的 type 仍然要被擋住
+select denied(
+  format('insert into items (trip_id, owner_user_id, type, title, created_by) values (%L, %L, %L, %L, %L)',
+         :'trip_id', :'ruby', 'xxx', '亂填類型', :'ruby'),
+  '不是三種之一的 type 仍然擋著');
+delete from items where type = 'reference';
+
 -- ── 標籤：成員都看得到，只有本人能改（F-22）──────────────────
 insert into tags (trip_id, user_id, name) values (:'trip_id', :'ruby', '拉麵');
 do $$ begin

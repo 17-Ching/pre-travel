@@ -87,7 +87,7 @@ create table if not exists public.items (
   trip_id         uuid not null references public.trips on delete cascade,
   -- v2.0：共同分頁移除（Q8，行程取代它），項目一定屬於某一個人的清單分頁
   owner_user_id   uuid not null references public.profiles on delete cascade,
-  type            text not null check (type in ('place', 'shopping')),
+  type            text not null check (type in ('place', 'shopping', 'reference')),
   title           text not null check (char_length(title) between 1 and 100),
   region_id       uuid references public.regions on delete set null,
   links           jsonb not null default '[]'::jsonb,
@@ -102,6 +102,11 @@ create table if not exists public.items (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
+-- 第三種子清單「參考」（YouTube 影片、IG 行程推薦這類）。既有資料庫的 CHECK 要換掉，
+-- 內容跟上面 create table 裡的一致。參考項目沿用既有欄位，沒有新欄位：
+-- visited / purchase_status / planned_store / images 前端不會寫，維持預設值。
+alter table public.items drop constraint if exists items_type_check;
+alter table public.items add constraint items_type_check check (type in ('place', 'shopping', 'reference'));
 
 create table if not exists public.item_tags (
   item_id uuid not null references public.items on delete cascade,
