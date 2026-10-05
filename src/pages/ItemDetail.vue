@@ -154,7 +154,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
       </div>
 
       <div class="px-4 pt-4">
-        <h1 :class="['text-[22px] font-semibold leading-tight', it.status === 'bought' && 'text-muted line-through']">{{ it.title }}</h1>
+        <h1 :class="['text-[22px] font-semibold leading-tight wrap-anywhere', it.status === 'bought' && 'text-muted line-through']">{{ it.title }}</h1>
 
         <div v-if="links.length" class="mt-4 grid gap-2">
           <a v-for="l in links" :key="l.id" :href="l.url" target="_blank" rel="noopener" class="btn-ghost w-full justify-start gap-2.5">

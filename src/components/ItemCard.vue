@@ -79,7 +79,9 @@ function fire(evt) {
       </div>
 
       <div class="min-w-0 flex-1">
-        <h3 :class="['line-clamp-2 text-[16px] font-semibold leading-[1.35] tracking-tight', item.status === 'bought' && 'line-through decoration-1']">{{ item.title }}</h3>
+        <!-- wrap-anywhere：標題整串是網址時中間沒有可斷的地方，line-clamp 只會硬裁在半個字上。
+             它只在一個字真的放不下時才斷，一般中英文標題的斷行不受影響 -->
+        <h3 :class="['line-clamp-2 text-[16px] font-semibold leading-[1.35] tracking-tight wrap-anywhere', item.status === 'bought' && 'line-through decoration-1']">{{ item.title }}</h3>
         <p v-if="item.plannedStore" class="mt-1 truncate text-[13px] font-medium text-accent">{{ item.plannedStore }}</p>
         <div v-if="region || tags.length || scheduled" class="mt-2 flex flex-wrap gap-1.5">
           <span v-if="scheduled" class="inline-flex h-[22px] items-center gap-1 rounded-md bg-accent-soft px-1.5 text-[11px] font-semibold text-accent">

@@ -98,7 +98,7 @@ const timeLabel = computed(() => {
           class="mb-1 inline-flex items-center rounded-md bg-accent-soft px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-accent">
           {{ timeLabel }}
         </span>
-        <span :class="['line-clamp-2 text-[15px] font-semibold leading-snug', entry.done && 'line-through decoration-1']">{{ title }}</span>
+        <span :class="['line-clamp-2 text-[15px] font-semibold leading-snug wrap-anywhere', entry.done && 'line-through decoration-1']">{{ title }}</span>
         <span v-if="isTransport && entry.transportMode" class="mt-0.5 block truncate text-[12px] text-tint">{{ entry.transportMode }}</span>
         <!-- 同一天好幾班時，靠這排頭像分辨誰搭哪一班 -->
         <span v-if="passengers.length" class="mt-1 flex flex-wrap items-center gap-1.5">

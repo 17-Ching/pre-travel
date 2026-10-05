@@ -114,6 +114,17 @@ body { @apply bg-surface text-ink font-sans antialiased; }
 }
 .rail::-webkit-scrollbar { display: none; }
 
+/* grid 在這個專案裡幾乎都被當成「直向堆疊」用（grid gap-3），有二十幾處。
+   沒指定欄寬時隱含欄是 auto，會被裡面最寬的內容撐開：一張卡片的標題或備註是一串
+   長網址，整排卡片全部一起凸出畫面 —— 不是那一張，是同一欄的每一張。
+   minmax(0, 1fr) 讓欄能縮回容器寬，長內容交給各自的換行或截斷處理。
+
+   放在 base 層是刻意的：有寫 grid-cols-* 的地方（旅程列表的雙欄資料夾）在
+   utilities 層，會蓋過這條。寫成不分層的話反而會蓋掉 grid-cols-*，雙欄就變單欄。 */
+@layer base {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* 形狀：盒子 14px，盒內元素 10px，chip / 頭像 / FAB 全圓。 */
 @layer components {
   .btn-primary { @apply inline-flex h-11 items-center justify-center gap-2 rounded-[14px] bg-accent px-4 text-[15px] font-semibold text-accent-fg transition duration-150 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40; }
