@@ -7,8 +7,10 @@ import { changePassword } from '../supabase'
 import PasswordInput from '../components/PasswordInput.vue'
 import TopBar from '../components/TopBar.vue'
 import Sheet from '../components/Sheet.vue'
+import { CHANGELOG } from '../changelog'
 
 const version = __APP_VERSION__
+const changelogOpen = ref(false)
 const year = new Date().getFullYear()
 // iOS 叫不出安裝視窗，只能開一張說明；其他瀏覽器有事件才顯示按鈕
 const iosHelp = ref(false)
@@ -148,10 +150,29 @@ async function submitPw() {
 
     <!-- 版本與版權。使用者回報問題時會講的就是這個版本號 -->
     <footer class="pb-2 text-center text-[12px] leading-relaxed text-muted">
-      <p>Onway v{{ version }}</p>
+      <!-- 版本號點了看更新紀錄。底線提示「這可以點」，不然沒人會想到去按版本號 -->
+      <button class="underline decoration-dotted underline-offset-4" @click="changelogOpen = true">Onway v{{ version }}</button>
       <p>© {{ year }} 17 Ching</p>
     </footer>
   </main>
+
+  <Sheet v-model:open="changelogOpen" title="更新紀錄">
+    <div class="grid gap-5 px-3 pb-3">
+      <section v-for="e in CHANGELOG" :key="e.version">
+        <h3 class="mb-2 flex items-baseline gap-2">
+          <span class="text-[16px] font-semibold tabular-nums">v{{ e.version }}</span>
+          <span class="text-[12px] tabular-nums text-muted">{{ e.date.replaceAll('-', '/') }}</span>
+          <span v-if="e.version === version" class="rounded-md bg-accent-soft px-1.5 py-0.5 text-[11px] font-semibold text-accent">你在用的</span>
+        </h3>
+        <ul class="grid gap-2">
+          <li v-for="(n, i) in e.notes" :key="i" class="flex gap-2 text-[14px] leading-relaxed">
+            <span class="mt-[0.6em] size-1 shrink-0 rounded-full bg-tint" aria-hidden="true" />
+            <span>{{ n }}</span>
+          </li>
+        </ul>
+      </section>
+    </div>
+  </Sheet>
 
   <!-- iOS 沒有安裝 API，只能把 Safari 的步驟畫出來 -->
   <Sheet v-model:open="iosHelp" title="加入主畫面">

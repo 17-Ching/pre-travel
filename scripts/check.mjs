@@ -6,6 +6,8 @@ import { isBlocked, meta, decode, toText } from '../api/preview.js'
 import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from '../src/auth-rules.js'
 import { addDays, daysBetween, coversDate, stayNights, stayDayLabel, tripPast } from '../src/date-rules.js'
 import { imagePaths, unusedPaths } from '../src/image-rules.js'
+import { readFileSync } from 'node:fs'
+import { CHANGELOG } from '../src/changelog.js'
 
 // ── SSRF 阻擋名單（F-14）
 for (const ip of [
@@ -160,5 +162,17 @@ assert.deepEqual(unusedPaths(uploaded, [{ images: [img('1')] }], []),
 assert.deepEqual(unusedPaths(uploaded, [], []), uploaded, '填一半離開，兩張都沒存到就都要清')
 assert.deepEqual(unusedPaths(uploaded, [{ images: [img('1'), img('2')] }], []), [],
   '兩張都存起來了就一張都不能碰')
+
+// ── 版本號與更新紀錄。畫面上的版本號吃 package.json，點開看到的是 changelog，
+// 兩份是分開手改的 —— 改了一邊忘了另一邊，使用者就會看到「v2.2.0」點開最新一筆卻是 2.1.0。
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+assert.equal(CHANGELOG[0].version, version, `package.json 是 ${version}，但更新紀錄最新一筆是 ${CHANGELOG[0].version}`)
+const semver = v => v.split('.').map(Number)
+const newer = (a, b) => { const [x, y] = [semver(a), semver(b)]; return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] }
+for (let i = 1; i < CHANGELOG.length; i++) {
+  assert.ok(newer(CHANGELOG[i - 1].version, CHANGELOG[i].version) > 0,
+    `更新紀錄要由新到舊排：${CHANGELOG[i - 1].version} 應該比 ${CHANGELOG[i].version} 新`)
+}
+for (const e of CHANGELOG) assert.ok(e.notes.length && /^\d{4}-\d{2}-\d{2}$/.test(e.date), `${e.version} 缺說明或日期格式不對`)
 
 console.log('檢查通過')
