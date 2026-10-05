@@ -78,9 +78,21 @@ create table if not exists public.tags (
   id      uuid primary key default gen_random_uuid(),
   trip_id uuid not null references public.trips on delete cascade,
   user_id uuid not null references public.profiles on delete cascade,
+  -- 參考的標籤（轉場影片、拍食物）跟地點／購物的（拉麵、必去）分成兩池，
+  -- 否則兩邊的選單都會塞滿用不到的選項。唯一鍵含 scope，所以同名可以各自獨立。
+  -- 地點與購物共用 'default'，既有資料靠這個預設值不用回填。
+  scope   text not null default 'default' check (scope in ('default', 'reference')),
   name    text not null check (char_length(name) between 1 and 20),
-  unique (trip_id, user_id, name)
+  unique (trip_id, user_id, scope, name)
 );
+-- 已經建過表的資料庫：create table if not exists 不會補欄位，也不會換掉舊的唯一鍵
+alter table public.tags add column if not exists scope text not null default 'default';
+alter table public.tags drop constraint if exists tags_scope_check;
+alter table public.tags add constraint tags_scope_check check (scope in ('default', 'reference'));
+alter table public.tags drop constraint if exists tags_trip_id_user_id_name_key;
+alter table public.tags drop constraint if exists tags_trip_id_user_id_scope_name_key;
+alter table public.tags add constraint tags_trip_id_user_id_scope_name_key
+  unique (trip_id, user_id, scope, name);
 
 create table if not exists public.items (
   id              uuid primary key default gen_random_uuid(),

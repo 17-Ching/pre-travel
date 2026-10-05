@@ -108,7 +108,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 59 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 62 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -245,7 +245,10 @@ supabase/
                         可重複執行。正式庫跑這支就好，不要為了這個重跑 schema.sql
   migrate-reference-type.sql  items.type 多一個 'reference'（第三種子清單）。
                         只換 items_type_check，可重複執行。同樣不要重跑 schema.sql
-  rls-test.sql        權限驗證，59 項。跑在用完就丟的本機 Postgres
+  migrate-tag-scope.sql  tags 加 scope 分兩池（default / reference），唯一鍵
+                        改成含 scope，同名可以各自獨立。含一段把「只被參考項目
+                        用到」的標籤搬過去的 UPDATE。可重複執行
+  rls-test.sql        權限驗證，62 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

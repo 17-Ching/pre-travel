@@ -218,6 +218,25 @@ select denied(
   format('delete from tags where id = %L', :'jean_tag'),
   '看得到別人的標籤，但不能刪除');
 
+-- 標籤分兩池：參考的跟地點／購物的分開，同名要能各自獨立存在。
+-- 驗完一樣自己刪掉，後面有斷言在數 tags 的筆數。
+do $$ begin
+  perform ok((select count(*) from tags where scope <> 'default') = 0,
+    '既有標籤全部留在預設池');
+end $$;
+insert into tags (trip_id, user_id, scope, name) values (:'trip_id', :'ruby', 'default', '拍食物');
+insert into tags (trip_id, user_id, scope, name) values (:'trip_id', :'ruby', 'reference', '拍食物');
+do $$ begin
+  perform ok((select count(*) from tags where name = '拍食物') = 2,
+    '同名標籤在兩個池裡各自獨立');
+end $$;
+-- 同一池裡同名仍然要被唯一鍵擋住
+select denied(
+  format('insert into tags (trip_id, user_id, scope, name) values (%L, %L, %L, %L)',
+         :'trip_id', :'ruby', 'reference', '拍食物'),
+  '同一池裡不能有兩個同名標籤');
+delete from tags where name = '拍食物';
+
 -- 只能貼自己的標籤（§4.2）
 select id as ruby_tag from tags where user_id = :'ruby' \gset
 select id as ruby_item from items where owner_user_id = :'ruby' \gset
