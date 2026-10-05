@@ -120,6 +120,13 @@ export async function promptInstall() {
   await e.prompt()
 }
 
+// ---- 願望清單分組的展開狀態
+// 預設收起來（使用者要的），所以記的是「展開了哪些」—— 新冒出來的組自然是收著的。
+// 刻意不存 localStorage：重開 app 一律從收合開始；但留在記憶體裡，點進項目詳情再
+// 返回時，剛剛打開的那幾組還開著，不用重找（scrollBehavior 還原的捲動位置也才有意義）。
+// key 是 行程:子清單:組，組是地區 id 或標籤名，改名或刪掉只會留下用不到的舊 key，無害。
+export const openGroups = reactive(new Set())
+
 // ---- toast
 let toastTimer
 export function toast(text, action) {

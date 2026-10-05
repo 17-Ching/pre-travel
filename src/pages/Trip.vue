@@ -2,9 +2,9 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
-  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks } from '@phosphor-icons/vue'
+  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight } from '@phosphor-icons/vue'
 import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatus, copyItem, deleteItem, toast, now, fmtTime, tagColor, sourceLabel, linkLabel,
-  tripDays, addEntry, entryFromItem, scheduledSlots, tagScope } from '../store'
+  tripDays, addEntry, entryFromItem, scheduledSlots, tagScope, openGroups } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
 import LoadState from '../components/LoadState.vue'
@@ -85,6 +85,15 @@ const groups = computed(() => {
 })
 const done = computed(() => scoped.value.filter(i => (p.type === 'shopping' ? i.status === 'bought' : i.visited)).length)
 const hasFilter = computed(() => p.regions.length || p.status || p.tags.length || p.q)
+
+// 分組可以收合，預設收著。兩種情況強制全部攤開、也不給收：
+//  - 正在篩選或搜尋：收著的組會把命中的項目藏起來，畫面上只剩一個寫著數字的標題，
+//    篩選等於白做。清掉篩選後回到原本收合的樣子，不動使用者的展開狀態。
+//  - 只有一組：沒有東西需要整理，收起來只是多點一下。
+const groupKey = g => `${tripId}:${p.type}:${g.key}`
+const forceOpen = computed(() => Boolean(hasFilter.value) || groups.value.length === 1)
+const isOpen = g => forceOpen.value || openGroups.has(groupKey(g))
+const toggleGroup = g => { const k = groupKey(g); openGroups.has(k) ? openGroups.delete(k) : openGroups.add(k) }
 
 const showSearch = ref(!!p.q), menu = ref(false), statusFor = ref(null), itemMenu = ref(null), filterOpen = ref(false)
 
@@ -305,15 +314,29 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         <button v-if="hasFilter" class="btn-ghost mt-6" @click="clearFilters">清除篩選</button>
       </div>
       <template v-else>
-        <section v-for="g in groups" :key="g.key" class="mb-6">
+        <!-- 收著的組間距縮小，一排框框看起來像目錄；打開的組照舊留 mb-6 -->
+        <section v-for="g in groups" :key="g.key" :class="isOpen(g) ? 'mb-6' : 'mb-0'">
           <!-- -mx-4 px-4 讓底色鋪滿整個寬度（main 有 1rem 的 gutter），
                不然卡片會從標題左右兩側的縫隙透出來 -->
           <h2 v-if="g.name" :style="{ top: `calc(3.5rem + ${headH}px)` }"
-            class="sticky z-[5] -mx-4 mb-2.5 flex items-center gap-2 bg-surface px-4 py-1.5 text-[13px] font-semibold tracking-wide text-muted">
-            <span class="size-1.5 rounded-full bg-tint" aria-hidden="true" />{{ g.name }}
-            <span class="font-normal tabular-nums">{{ g.items.length }}</span>
+            :class="['sticky z-[5] -mx-4 bg-surface px-4 py-1 text-[13px] font-semibold tracking-wide text-muted', isOpen(g) && 'mb-1.5']">
+            <!-- 整條都是按鈕，加框讓它看得出「這可以點」。篩選中或只有一組時不給收，
+                 那時候就只是一行字、不加框 —— 框是在說可以點，不能點就不該有 -->
+            <button v-if="!forceOpen" :aria-expanded="isOpen(g)" @click="toggleGroup(g)"
+              class="flex w-full items-center gap-2 rounded-[12px] border border-line bg-card px-3 py-2.5 text-left text-[14px] text-ink transition-colors duration-150 active:bg-surface-2">
+              <PhCaretRight :size="12" weight="bold" :class="['shrink-0 text-tint transition-transform duration-150', isOpen(g) && 'rotate-90']" />
+              <!-- 名稱只吃它需要的寬度（不 flex-1），數量才會緊跟在字後面；
+                   太長時名稱自己截斷，數量永遠看得到 -->
+              <span class="min-w-0 truncate">{{ g.name }}</span>
+              <span class="shrink-0 text-[13px] font-normal tabular-nums text-muted">{{ g.items.length }}</span>
+            </button>
+            <span v-else class="flex items-center gap-2 py-1.5">
+              <span class="size-1.5 rounded-full bg-tint" aria-hidden="true" />{{ g.name }}
+              <span class="font-normal tabular-nums">{{ g.items.length }}</span>
+            </span>
           </h2>
-          <TransitionGroup tag="ul" name="list" class="relative grid gap-3">
+          <!-- v-show 不是 v-if：收起來不會把卡片拆掉，再打開時圖片不用重載 -->
+          <TransitionGroup v-show="isOpen(g)" tag="ul" name="list" class="relative grid gap-3">
             <li v-for="i in g.items" :key="i.id">
               <ItemCard :item="i" :editable="editable" :show-author="false"
                 @status="statusFor = i" @visited="setStatus(i, { visited: !i.visited })" @menu="itemMenu = i" />
