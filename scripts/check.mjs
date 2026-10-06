@@ -6,6 +6,7 @@ import { isBlocked, meta, decode, toText } from '../api/preview.js'
 import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from '../src/auth-rules.js'
 import { addDays, daysBetween, coversDate, stayNights, stayDayLabel, tripPast } from '../src/date-rules.js'
 import { imagePaths, unusedPaths } from '../src/image-rules.js'
+import { splitEven, debts, totals, fmtMoney } from '../src/expense-rules.js'
 import { readFileSync } from 'node:fs'
 import { CHANGELOG } from '../src/changelog.js'
 
@@ -162,6 +163,26 @@ assert.deepEqual(unusedPaths(uploaded, [{ images: [img('1')] }], []),
 assert.deepEqual(unusedPaths(uploaded, [], []), uploaded, '填一半離開，兩張都沒存到就都要清')
 assert.deepEqual(unusedPaths(uploaded, [{ images: [img('1'), img('2')] }], []), [],
   '兩張都存起來了就一張都不能碰')
+
+// ── 記帳：均分與誰欠誰。錢算錯是會吵架的，每個規則都要擋住。
+assert.deepEqual(splitEven(100, ['a', 'b', 'c'], 'a', 'JPY'), [34, 33, 33], '日幣不能有小數，零頭給付款人')
+assert.deepEqual(splitEven(100, ['a', 'b', 'c'], 'c', 'JPY'), [33, 33, 34])
+assert.deepEqual(splitEven(100, ['a', 'b', 'c'], 'z', 'JPY'), [34, 33, 33], '付款人沒參加，零頭給第一個人')
+assert.deepEqual(splitEven(10, ['a', 'b', 'c'], 'a', 'USD'), [3.34, 3.33, 3.33], '美金算到分')
+assert.equal(splitEven(1001, ['a', 'b', 'c', 'd', 'e', 'f', 'g'], 'a', 'TWD').reduce((s, n) => s + n, 0), 1001, '加總一定要等於原金額')
+assert.deepEqual(splitEven(500, [], 'a', 'JPY'), [])
+
+const ex = (payerId, currency, shares) => ({ payerId, currency, shares: shares.map(([userId, amount, settled = false]) => ({ userId, amount, settled })) })
+assert.deepEqual(debts([ex('a', 'JPY', [['a', 300], ['b', 300], ['c', 300]])]),
+  [{ from: 'b', to: 'a', currency: 'JPY', amount: 300 }, { from: 'c', to: 'a', currency: 'JPY', amount: 300 }], '付款人自己那份不算欠')
+assert.deepEqual(debts([ex('a', 'JPY', [['b', 1000]]), ex('b', 'JPY', [['a', 400]])]),
+  [{ from: 'b', to: 'a', currency: 'JPY', amount: 600 }], '兩人互欠要抵銷')
+assert.deepEqual(debts([ex('a', 'JPY', [['b', 500]]), ex('b', 'JPY', [['a', 500]])]), [], '剛好抵平就不列')
+assert.deepEqual(debts([ex('a', 'JPY', [['b', 500, true]])]), [], '已付清的不算')
+assert.deepEqual(debts([ex('a', 'JPY', [['b', 500]]), ex('b', 'TWD', [['a', 100]])]).length, 2, '不同幣別不能互抵')
+assert.deepEqual(totals([{ currency: 'USD', amount: 0.1 }, { currency: 'USD', amount: 0.2 }]), [['USD', 0.3]], '浮點誤差要收掉')
+assert.equal(fmtMoney(1200, 'TWD'), 'NT$1,200')
+assert.equal(fmtMoney(3200, 'JPY'), '¥3,200')
 
 // ── 版本號與更新紀錄。畫面上的版本號吃 package.json，點開看到的是 changelog，
 // 兩份是分開手改的 —— 改了一邊忘了另一邊，使用者就會看到「v2.2.0」點開最新一筆卻是 2.1.0。

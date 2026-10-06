@@ -74,6 +74,22 @@ const entryRow = e => ({
   sort_order: e.order ?? 0,
 })
 
+// 記帳。分攤直接掛在帳目底下（跟 items 的 tagIds 一樣），畫面不用自己 join
+const toExpense = r => ({
+  id: r.id, tripId: r.trip_id, kind: r.kind, title: r.title, amount: Number(r.amount), currency: r.currency,
+  date: r.date, note: r.note ?? '', payerId: r.payer_id, ownerUserId: r.owner_user_id,
+  sourceExpenseId: r.source_expense_id, shares: [],
+  createdBy: r.created_by, updatedBy: r.updated_by, createdAt: r.created_at, updatedAt: r.updated_at,
+})
+const toShare = r => ({ userId: r.user_id, amount: Number(r.amount), settled: r.settled })
+const expenseRow = e => ({
+  trip_id: e.tripId, kind: e.kind, title: e.title.trim().slice(0, 100), amount: e.amount, currency: e.currency,
+  date: e.date, note: (e.note ?? '').slice(0, 500),
+  payer_id: e.kind === 'group' ? e.payerId : null,
+  owner_user_id: e.kind === 'personal' ? e.ownerUserId : null,
+  source_expense_id: e.sourceExpenseId ?? null,
+})
+
 const toDay = r => ({ tripId: r.trip_id, date: r.date, note: r.note ?? '', updatedBy: r.updated_by, updatedAt: r.updated_at })
 
 // 寫回資料庫時只留欄位本身，畫面加上去的東西（簽名網址）要剝掉
@@ -97,7 +113,7 @@ const itemRow = i => ({
 // 頁面繼續用同步的方式讀。RLS 已經把範圍限制在他參與的專案裡，
 // 朋友等級的資料量這樣最省事，也直接鋪好離線快取（F-32）的路。
 export async function loadAll() {
-  const [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days] = await Promise.all([
+  const [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days, expenses, shares] = await Promise.all([
     sb().from('profiles').select('*'),
     sb().from('trips').select('*'),
     sb().from('trip_members').select('*'),
@@ -108,10 +124,21 @@ export async function loadAll() {
     sb().from('invites').select('*'),
     sb().from('itinerary_entries').select('*'),
     sb().from('trip_days').select('*'),
+    sb().from('expenses').select('*'),
+    sb().from('expense_shares').select('*'),
   ])
-  for (const r of [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days]) {
+  // 記帳的表還沒建（migration 還沒跑）時不要把整個 app 拖垮，當成沒有帳就好。
+  // 只放過「表不存在」，權限之類的錯誤照樣要報出來。
+  for (const r of [expenses, shares]) {
+    if (r.error && /PGRST205|42P01/.test(r.error.code)) Object.assign(r, { error: null, data: [] })
+  }
+  for (const r of [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days, expenses, shares]) {
     if (r.error) throw new Error('載入資料失敗：' + r.error.message)
   }
+
+  const ledger = expenses.data.map(toExpense)
+  const byExpense = new Map(ledger.map(e => [e.id, e]))
+  for (const r of shares.data) byExpense.get(r.expense_id)?.shares.push(toShare(r))
 
   const mapped = items.data.map(toItem)
   const byId = new Map(mapped.map(i => [i.id, i]))
@@ -127,6 +154,7 @@ export async function loadAll() {
     invites: invites.data.map(toInvite),
     entries: entries.data.map(toEntry),
     days: days.data.map(toDay),
+    expenses: ledger,
   }
 }
 
@@ -337,6 +365,35 @@ export async function saveDayNote(tripId, date, note, userId) {
 export async function deleteDayNote(tripId, date) {
   const { error } = await sb().from('trip_days').delete().eq('trip_id', tripId).eq('date', date)
   if (error) throw new Error('清除當天備註失敗：' + error.message)
+}
+
+// ---- 記帳 ----
+// 共同帳的帳目與分攤要一起成功或一起失敗：只存到帳目、分攤掛掉的話，
+// 那筆錢就變成沒有人要付。所以走 RPC，在資料庫裡包成一個交易。
+export async function saveGroupExpense(e) {
+  const { error } = await sb().rpc('save_group_expense', {
+    p_expense: { id: e.id, ...expenseRow(e) },
+    p_shares: e.shares.map(s => ({ user_id: s.userId, amount: s.amount, settled: s.settled })),
+  })
+  if (error) throw new Error('儲存帳目失敗：' + error.message)
+}
+
+export async function createPersonalExpense(e, userId) {
+  const { error } = await sb().from('expenses').insert({ id: e.id, ...expenseRow(e), created_by: userId })
+  if (error) throw new Error('新增帳目失敗：' + error.message)
+}
+export async function updatePersonalExpense(e) {
+  must(await sb().from('expenses').update(expenseRow(e)).eq('id', e.id).select(), '儲存帳目')
+}
+// 分攤會跟著 cascade 刪掉；從這筆加進個人帳的那幾筆只是斷開來源，不會被刪
+export async function deleteExpense(id) {
+  must(await sb().from('expenses').delete().eq('id', id).select(), '刪除帳目')
+}
+
+// 「結清」一次會勾好幾筆，所以收一串帳目 id
+export async function setSettled(expenseIds, userId, settled) {
+  must(await sb().from('expense_shares').update({ settled })
+    .in('expense_id', expenseIds).eq('user_id', userId).select(), '更新付清狀態')
 }
 
 // ---- 邀請與成員 ----

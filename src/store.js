@@ -21,6 +21,10 @@ export const COUNTRIES = [
 ].map(([code, name]) => ({ code, name }))
 export const flag = code => String.fromCodePoint(...[...code].map(c => 0x1f1e6 + c.charCodeAt(0) - 65))
 export const countryName = code => COUNTRIES.find(c => c.code === code)?.name ?? code
+// 記帳的預設幣別跟著專案國家走，表單裡另外給一個台幣可選
+const CURRENCY = { JP: 'JPY', KR: 'KRW', TW: 'TWD', TH: 'THB', VN: 'VND', SG: 'SGD', HK: 'HKD', MY: 'MYR',
+  US: 'USD', GB: 'GBP', FR: 'EUR', IT: 'EUR', DE: 'EUR', ES: 'EUR', AU: 'AUD', NZ: 'NZD', CA: 'CAD' }
+export const tripCurrencies = tripId => [...new Set([CURRENCY[trip(tripId)?.country] ?? 'TWD', 'TWD'])]
 
 // F-22: 8 fixed tag hues picked by name hash. Colour values live in style.css (.tag-0…7);
 // light/dark are derived there with color-mix, so one class works in both themes.
@@ -75,7 +79,7 @@ watch(() => theme.v, v => {
 }, { immediate: true })
 
 // ---- store 本體
-const empty = () => ({ users: [], trips: [], members: [], regions: [], tags: [], items: [], invites: [], entries: [], days: [] })
+const empty = () => ({ users: [], trips: [], members: [], regions: [], tags: [], items: [], invites: [], entries: [], days: [], expenses: [] })
 export const store = reactive({
   me: null,          // 目前登入者的 id
   ready: false,      // 第一次載入完成前，頁面顯示載入中
@@ -897,6 +901,86 @@ export function setDayNote(tripId, date, note) {
     const i = store.days.indexOf(created)
     if (i >= 0) store.days.splice(i, 1)
   })
+}
+
+// ---- 記帳 ----
+// 共同帳全員可新增修改；個人帳只有自己看得到（RLS 擋，別人的根本不會載進來）。
+// 分攤掛在共同帳底下的 shares，付款人自己那份一律算已付清。
+export { splitEven, debts, totals, fmtMoney, decimalsOf } from './expense-rules'
+export const groupExpenses = tripId => store.expenses
+  .filter(e => e.tripId === tripId && e.kind === 'group')
+  .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
+export const myExpenses = tripId => store.expenses
+  .filter(e => e.tripId === tripId && e.kind === 'personal' && e.ownerUserId === store.me)
+  .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
+// 「加入我的記帳」加過了沒：按鈕要變成「已加入」，不能重複加
+export const addedToMine = expenseId => store.expenses.some(e => e.sourceExpenseId === expenseId && e.ownerUserId === store.me)
+
+export function saveExpense(data) {
+  const existing = store.expenses.find(e => e.id === data.id)
+  // 換了付款人的話，舊付款人那份原本是「自動付清」，現在他欠錢了，要退回未付清
+  const oldPayer = existing?.payerId
+  const shares = data.kind === 'group'
+    ? data.shares.map(s => ({ ...s, settled: s.userId === data.payerId || (s.settled && s.userId !== oldPayer) }))
+    : []
+  const send = e => (e.kind === 'group' ? api.saveGroupExpense(e)
+    : existing ? api.updatePersonalExpense(e) : api.createPersonalExpense(e, store.me))
+  if (existing) {
+    const before = JSON.parse(JSON.stringify(existing))
+    Object.assign(existing, data, { shares, updatedBy: store.me, updatedAt: now() })
+    push(() => send(existing), () => Object.assign(existing, before))
+    return existing
+  }
+  const e = reactive({
+    note: '', payerId: null, ownerUserId: null, sourceExpenseId: null,
+    ...data, shares, id: uid(),
+    createdBy: store.me, updatedBy: store.me, createdAt: now(), updatedAt: now(),
+  })
+  store.expenses.push(e)
+  push(() => send(e), () => {
+    const i = store.expenses.indexOf(e)
+    if (i >= 0) store.expenses.splice(i, 1)
+  })
+  return e
+}
+
+export function deleteExpense(id) {
+  const i = store.expenses.findIndex(e => e.id === id)
+  if (i < 0) return
+  const [removed] = store.expenses.splice(i, 1)
+  // 資料庫是 on delete set null，本地做同一件事：加進個人帳的那筆留著，只是不再連到來源
+  const copies = store.expenses.filter(e => e.sourceExpenseId === id)
+  copies.forEach(e => { e.sourceExpenseId = null })
+  push(() => api.deleteExpense(id), () => {
+    store.expenses.splice(i, 0, removed)
+    copies.forEach(e => { e.sourceExpenseId = id })
+  })
+}
+
+// 共同帳裡我的那份，複製成一筆個人帳。複製不是引用：加進來之後可以自己改
+export function addShareToMine(e) {
+  const mine = e.shares.find(s => s.userId === store.me)
+  if (!mine || addedToMine(e.id)) return null
+  return saveExpense({
+    tripId: e.tripId, kind: 'personal', ownerUserId: store.me, sourceExpenseId: e.id,
+    title: e.title, amount: mine.amount, currency: e.currency, date: e.date, note: '',
+  })
+}
+
+// 勾一個人在幾筆帳裡的分攤為已付清（或取消）。單筆勾選與「全部結清」共用
+function markSettled(list, userId, settled) {
+  const hits = list.map(e => [e.id, e.shares.find(s => s.userId === userId)]).filter(([, s]) => s && s.settled !== settled)
+  if (!hits.length) return
+  hits.forEach(([, s]) => { s.settled = settled })
+  push(() => api.setSettled(hits.map(([id]) => id), userId, settled), () => hits.forEach(([, s]) => { s.settled = !settled }))
+}
+export const toggleSettled = (e, userId) => markSettled([e], userId, !e.shares.find(s => s.userId === userId)?.settled)
+
+// 兩人之間某個幣別的帳一次結清：A 付的、B 有份的，和 B 付的、A 有份的，全部勾掉
+export function settlePair(tripId, a, b, currency) {
+  const list = groupExpenses(tripId).filter(e => e.currency === currency)
+  markSettled(list.filter(e => e.payerId === b), a, true)
+  markSettled(list.filter(e => e.payerId === a), b, true)
 }
 
 // ---- F-14 / F-28 連結預覽。真的抓網頁的邏輯在 api/preview.js（Vercel function）。

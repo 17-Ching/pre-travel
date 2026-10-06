@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
-  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight } from '@phosphor-icons/vue'
+  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight, PhWallet } from '@phosphor-icons/vue'
 import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatus, copyItem, deleteItem, toast, now, fmtTime, tagColor, sourceLabel, linkLabel,
   tripDays, addEntry, entryFromItem, scheduledSlots, tagScope, openGroups } from '../store'
 import TopBar from '../components/TopBar.vue'
@@ -10,6 +10,7 @@ import Avatar from '../components/Avatar.vue'
 import LoadState from '../components/LoadState.vue'
 import ItemCard from '../components/ItemCard.vue'
 import Itinerary from '../components/Itinerary.vue'
+import Ledger from '../components/Ledger.vue'
 import Sheet from '../components/Sheet.vue'
 
 const route = useRoute(), router = useRouter()
@@ -22,8 +23,8 @@ const t = computed(() => trip(tripId))
 const missing = computed(() => store.ready && !store.loading && !store.loadError && !t.value)
 const p = prefs(tripId) // F-09 / F-24: tab, type and filters remembered locally
 // 舊的 prefs 只有一個 tab，值可能是 'shared'（v2.0 移除）、'me' 或某個成員 id。
-// 現在分兩層：tab 只有願望清單／行程，「看誰的清單」記在 who。
-if (p.tab !== 'list' && p.tab !== 'itinerary') { p.who = p.tab === 'shared' ? 'me' : p.tab; p.tab = 'list' }
+// 現在分兩層：tab 是願望清單／行程／記帳，「看誰的清單」記在 who。
+if (!['list', 'itinerary', 'ledger'].includes(p.tab)) { p.who = p.tab === 'shared' ? 'me' : p.tab; p.tab = 'list' }
 p.who ??= 'me'
 // ?tab= / ?who= 來自複製與加入行程的 toast；同一個元件實例，所以用 watch 不是讀一次
 watch(() => route.query, q => {
@@ -37,6 +38,9 @@ if (!store.offline) store.syncedAt = now()
 const others = computed(() => tripMembers(tripId).filter(m => m.userId !== store.me)
   .sort((a, b) => (a.status === 'left') - (b.status === 'left') || a.joinedAt.localeCompare(b.joinedAt)))
 const onItinerary = computed(() => p.tab === 'itinerary')
+const onLedger = computed(() => p.tab === 'ledger')
+// 願望清單專用的那一整塊（看誰的、子清單、篩選）在另外兩個分頁都不出現
+const onList = computed(() => p.tab === 'list')
 const tabOwner = computed(() => (p.who === 'me' ? store.me : p.who))
 const editable = computed(() => tabOwner.value === store.me)
 const regions = computed(() => regionsOf(tripId))
@@ -244,10 +248,11 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       <nav class="rail flex gap-5">
         <button :class="tabCls('list')" @click="p.tab = 'list'"><PhListChecks :size="18" />願望清單</button>
         <button :class="tabCls('itinerary')" @click="p.tab = 'itinerary'"><PhCalendarBlank :size="18" />行程</button>
+        <button :class="tabCls('ledger')" @click="p.tab = 'ledger'"><PhWallet :size="18" />記帳</button>
       </nav>
 
       <!-- 「看誰的清單」收進願望清單裡，只有真的有別人時才出現 -->
-      <div v-if="!onItinerary && others.length" class="rail flex gap-2 pt-2">
+      <div v-if="onList && others.length" class="rail flex gap-2 pt-2">
         <button :class="['chip-state', p.who === 'me' && 'on']" @click="p.who = 'me'">
           <Avatar :user="me()" :size="18" />我的
         </button>
@@ -258,7 +263,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       </div>
 
       <!-- 行程分頁有自己的日期列與版面，下面這整塊是願望清單專用 -->
-      <div v-if="!onItinerary" class="gutter pb-2 pt-2">
+      <div v-if="onList" class="gutter pb-2 pt-2">
         <!-- 滑塊寬度＝(容器扣掉左右 padding) / 3，位移是自己寬度的整數倍 -->
         <div class="relative grid grid-cols-3 rounded-[12px] bg-surface-2 p-1">
           <div class="absolute inset-y-1 left-1 w-[calc((100%-0.5rem)/3)] rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
@@ -273,20 +278,21 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         </div>
       </div>
 
-      <div v-if="!onItinerary" class="h-px w-full bg-line">
+      <div v-if="onList" class="h-px w-full bg-line">
         <div v-if="scoped.length && hasStatus" class="h-px bg-accent transition-[width] duration-200 ease-out"
           :style="{ width: (done / scoped.length) * 100 + '%' }" role="progressbar" :aria-valuenow="done" :aria-valuemax="scoped.length"
           :aria-label="`${p.type === 'shopping' ? '已買' : '已去'} ${done} / ${scoped.length}`" />
       </div>
 
       <!-- 只有真的在篩選時才出現這一行，沒篩選就零成本 -->
-      <div v-if="!onItinerary && activeFilters.length" class="gutter flex items-center gap-2 border-b border-line py-2 text-[13px]">
+      <div v-if="onList && activeFilters.length" class="gutter flex items-center gap-2 border-b border-line py-2 text-[13px]">
         <span class="min-w-0 flex-1 truncate text-muted">已篩選：{{ activeFilters.map(f => f.label).join('・') }}</span>
         <button class="shrink-0 font-semibold text-accent" @click="clearFilters">清除</button>
       </div>
     </div>
 
     <Itinerary v-if="onItinerary" :trip-id="tripId" />
+    <Ledger v-else-if="onLedger" :trip-id="tripId" />
 
     <main v-else class="gutter pb-32 pt-4">
       <!-- 篩選入口跟著清單捲動；捲走之後由上面那條 sticky 摘要接手顯示狀態 -->
@@ -346,7 +352,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       </template>
     </main>
 
-    <button v-if="editable && !onItinerary" aria-label="新增" @click="add"
+    <button v-if="editable && onList" aria-label="新增" @click="add"
       :class="['fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 flex size-14 items-center justify-center rounded-full bg-accent text-accent-fg shadow-e2 transition duration-150 active:scale-90', store.offline && 'opacity-40']">
       <PhPlus :size="26" weight="bold" />
     </button>
