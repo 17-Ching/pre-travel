@@ -99,8 +99,12 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 | 撤銷邀請：owner 全部，成員限自己產生的 | `invites_update` | 同上 |
 | 擁有者不能自行離開 | `owner_cannot_leave` CHECK 約束，不是 policy | 同上 |
 | **行程**：任何 active 成員都能增刪改 | `itinerary_*` 四條、`trip_days_all` | 同上 |
+| **記帳**：共同帳全員可增刪改 | `expenses_*` 四條，判斷集中在 `can_touch_expense()` | 同上 |
+| 個人帳只有本人看得到、改得到 | 同上。讀取刻意不查成員資格，離開專案後仍讀得到自己的舊帳 | 同上 |
+| 分攤的 settled 任何成員都能勾 | `expense_shares_update`，不限當事人（現場誰收到錢誰標） | 同上 |
+| 帳目與分攤必須同生共死 | `save_group_expense()` RPC，security invoker 所以 RLS 照樣生效 | 同上 |
 
-共 32 條 policy、4 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite`）、6 個觸發器。
+共 40 條 policy、5 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite` / `save_group_expense`）、7 個觸發器。
 
 行程刻意**沒有** `owner_user_id`，不設個人隔離。PRD §3.2 的理由：行程的價值在於大家看同一份，個人的想法放在自己的清單分頁。
 
@@ -108,7 +112,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 62 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 77 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -248,7 +252,9 @@ supabase/
   migrate-tag-scope.sql  tags 加 scope 分兩池（default / reference），唯一鍵
                         改成含 scope，同名可以各自獨立。含一段把「只被參考項目
                         用到」的標籤搬過去的 UPDATE。可重複執行
-  rls-test.sql        權限驗證，62 項。跑在用完就丟的本機 Postgres
+  migrate-expenses.sql  記帳（v2.2.0）：expenses / expense_shares 兩張新表、
+                        RLS 八條、save_group_expense RPC。可重複執行
+  rls-test.sql        權限驗證，77 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

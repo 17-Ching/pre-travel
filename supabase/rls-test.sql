@@ -52,6 +52,12 @@ end $$;
 grant usage on schema public to authenticated;
 grant all on all tables in schema public to authenticated;
 grant execute on all functions in schema public to authenticated;
+-- 正式 Supabase 的 authenticated 本來就叫得動 auth.uid()，這個 mock 要補上才一致。
+-- 少了它，security definer 的函式看不出差別（它們用的是擁有者權限），但 security
+-- invoker 的 RPC 一進去就 permission denied for schema auth —— 那是harness 的差異，
+-- 不是程式的問題，補齊才不會逼著把 RPC 改成 definer 來迴避。
+grant usage on schema auth to authenticated;
+grant execute on all functions in schema auth to authenticated;
 
 -- ── 測試工具 ────────────────────────────────────────────────
 create or replace function ok(cond boolean, label text) returns void language plpgsql as $$
@@ -350,6 +356,100 @@ insert into regions (trip_id, name, sort_order) values (:'trip_id', '大阪', 1)
 do $$ begin
   perform ok((select count(*) from regions) = 2, '一般成員可以新增地區');
 end $$;
+
+-- ── 記帳（v2.2.0）：共同帳全員共用、個人帳只有本人 ──────────────
+-- 這一段要跑在 Ruby 還是 active 成員的時候，所以放在「離開」之前。
+-- 驗完自己清乾淨，後面有斷言在數別張表的筆數，不要留殘渣。
+select save_group_expense(
+  jsonb_build_object(
+    'id', '77777777-0000-0000-0000-000000000001', 'trip_id', :'trip_id', 'kind', 'group',
+    'title', '晚餐 居酒屋', 'amount', 3000, 'currency', 'JPY', 'date', '2026-11-13',
+    'note', '', 'payer_id', :'ruby'),
+  jsonb_build_array(
+    jsonb_build_object('user_id', :'ruby', 'amount', 1500, 'settled', false),
+    jsonb_build_object('user_id', :'jean', 'amount', 1500, 'settled', false)));
+do $$ begin
+  perform ok((select count(*) from expenses where kind = 'group') = 1, '成員可以新增共同帳');
+  perform ok((select count(*) from expense_shares) = 2, '分攤跟著帳目一起寫進去');
+end $$;
+
+-- 加總對不起來要擋：差一塊錢就是有人的份沒算到，存進去要等分帳才會發現
+select denied(
+  format('select save_group_expense(%L::jsonb, %L::jsonb)',
+    jsonb_build_object('id', '77777777-0000-0000-0000-000000000002', 'trip_id', :'trip_id',
+      'kind', 'group', 'title', '湊不攏', 'amount', 3000, 'currency', 'JPY',
+      'date', '2026-11-13', 'note', '', 'payer_id', :'ruby'),
+    jsonb_build_array(jsonb_build_object('user_id', :'ruby', 'amount', 1000, 'settled', false))),
+  '分攤加總不等於總額時拒絕');
+
+-- settled 任何成員都能勾，不是只有當事人：現場誰收到錢誰就順手標
+update expense_shares set settled = true where user_id = :'jean';
+do $$ begin
+  perform ok((select settled from expense_shares
+              where user_id = '11111111-1111-1111-1111-111111111111') = true,
+    '成員可以勾別人的分攤為已付清');
+end $$;
+
+-- 編輯時把 Jean 從名單上拿掉，他的分攤要跟著消失
+select save_group_expense(
+  jsonb_build_object(
+    'id', '77777777-0000-0000-0000-000000000001', 'trip_id', :'trip_id', 'kind', 'group',
+    'title', '晚餐 居酒屋', 'amount', 3000, 'currency', 'JPY', 'date', '2026-11-13',
+    'note', '改成自己請', 'payer_id', :'ruby'),
+  jsonb_build_array(jsonb_build_object('user_id', :'ruby', 'amount', 3000, 'settled', false)));
+do $$ begin
+  perform ok((select count(*) from expense_shares
+              where expense_id = '77777777-0000-0000-0000-000000000001') = 1,
+    '編輯時從名單拿掉的人，分攤會被刪掉');
+end $$;
+
+-- 個人帳：Ruby 建一筆，而且是從上面那筆共同帳複製進來的
+insert into expenses (id, trip_id, kind, title, amount, currency, date, owner_user_id,
+                      source_expense_id, created_by)
+values ('77777777-0000-0000-0000-000000000003', :'trip_id', 'personal', '我那份晚餐',
+        3000, 'JPY', '2026-11-13', :'ruby', '77777777-0000-0000-0000-000000000001', :'ruby');
+
+-- 換 Jean：共同帳看得到，Ruby 的個人帳完全看不到也改不了
+set app.uid = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform ok((select count(*) from expenses where kind = 'group') = 1, '成員看得到共同帳');
+  perform ok((select count(*) from expenses where kind = 'personal') = 0,
+    '看不到別人的個人帳');
+end $$;
+select denied(
+  format('update expenses set title = %L where id = %L',
+         '亂改', '77777777-0000-0000-0000-000000000003'),
+  '不能改別人的個人帳');
+select denied(
+  format('delete from expenses where id = %L', '77777777-0000-0000-0000-000000000003'),
+  '不能刪別人的個人帳');
+
+-- 非成員兩種都看不到
+set app.uid = '33333333-3333-3333-3333-333333333333';
+do $$ begin
+  perform ok((select count(*) from expenses) = 0, '非成員看不到任何帳目');
+  perform ok((select count(*) from expense_shares) = 0, '非成員看不到分攤');
+end $$;
+select denied(
+  format('select save_group_expense(%L::jsonb, %L::jsonb)',
+    jsonb_build_object('id', '77777777-0000-0000-0000-000000000004', 'trip_id', :'trip_id',
+      'kind', 'group', 'title', '非成員亂記', 'amount', 100, 'currency', 'JPY',
+      'date', '2026-11-13', 'note', '', 'payer_id', :'kai'),
+    jsonb_build_array(jsonb_build_object('user_id', :'kai', 'amount', 100, 'settled', false))),
+  '非成員不能呼叫 save_group_expense');
+
+-- 刪掉共同帳：分攤連帶消失，但從它複製出去的個人帳要留著，只是斷開來源
+set app.uid = '22222222-2222-2222-2222-222222222222';
+delete from expenses where id = '77777777-0000-0000-0000-000000000001';
+do $$ begin
+  perform ok((select count(*) from expense_shares) = 0, '刪共同帳時分攤連帶刪掉');
+  perform ok((select count(*) from expenses where id = '77777777-0000-0000-0000-000000000003') = 1,
+    '刪共同帳之後，複製出去的個人帳還在');
+  perform ok((select source_expense_id from expenses
+              where id = '77777777-0000-0000-0000-000000000003') is null,
+    '個人帳的來源被斷開，不是跟著被刪');
+end $$;
+delete from expenses where id = '77777777-0000-0000-0000-000000000003';
 
 -- ── 離開與擁有者限制（§3.3）─────────────────────────────────
 update trip_members set status = 'left', left_at = now() where user_id = :'ruby';

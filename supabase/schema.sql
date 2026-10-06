@@ -219,6 +219,46 @@ alter table public.itinerary_entries add constraint end_after_start check (end_t
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 
+-- 記帳（v2.2.0）。兩種帳混在同一張表，靠 kind 分：
+--   group    全員共用，payer_id 記誰先付，分攤在 expense_shares
+--   personal 只有本人看得到，owner_user_id 是誰的
+-- 分成兩張表會讓「把共同帳的自己那份複製進個人帳」變成跨表搬運，
+-- 而兩邊的欄位其實一模一樣，所以合在一起用 CHECK 把不合法的組合擋掉。
+create table if not exists public.expenses (
+  id                uuid primary key default gen_random_uuid(),
+  trip_id           uuid not null references public.trips on delete cascade,
+  kind              text not null check (kind in ('personal', 'group')),
+  title             text not null check (char_length(title) between 1 and 100),
+  amount            numeric(12,2) not null check (amount > 0),
+  currency          text not null check (currency ~ '^[A-Z]{3}$'),
+  date              date not null,
+  note              text not null default '' check (char_length(note) <= 500),
+  -- 共同帳：誰先墊的
+  payer_id          uuid references public.profiles on delete set null,
+  -- 個人帳：這是誰的帳
+  owner_user_id     uuid references public.profiles on delete cascade,
+  -- 個人帳若是從某筆共同帳複製進來的，留著來源。共同帳被刪時斷開，個人帳自己留著
+  source_expense_id uuid references public.expenses on delete set null,
+  created_by        uuid not null references public.profiles on delete cascade,
+  updated_by        uuid references public.profiles on delete set null,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  constraint expense_kind_shape check (
+    (kind = 'group'    and payer_id is not null and owner_user_id is null and source_expense_id is null)
+    or
+    (kind = 'personal' and owner_user_id is not null and payer_id is null)
+  )
+);
+
+-- 共同帳的分攤。settled 是「這個人這一份已經付清」，任何成員都能勾（§記帳）
+create table if not exists public.expense_shares (
+  expense_id uuid not null references public.expenses on delete cascade,
+  user_id    uuid not null references public.profiles on delete cascade,
+  amount     numeric(12,2) not null check (amount > 0),
+  settled    boolean not null default false,
+  primary key (expense_id, user_id)
+);
+
 create index if not exists items_trip_idx        on public.items (trip_id);
 create index if not exists items_owner_idx       on public.items (trip_id, owner_user_id, type);
 create index if not exists members_user_idx      on public.trip_members (user_id);
@@ -229,6 +269,10 @@ create index if not exists item_tags_tag_idx     on public.item_tags (tag_id);
 create index if not exists itinerary_day_idx     on public.itinerary_entries (trip_id, date, section, slot, sort_order);
 -- 反查「這個地點排在哪幾天」，F-41 的重複提示與 F-47 的刪除確認都要用
 create index if not exists itinerary_item_idx    on public.itinerary_entries (item_id);
+-- 記帳頁一次撈一個專案的兩種帳；分攤則是反查「這個人欠哪幾筆」
+create index if not exists expenses_trip_idx     on public.expenses (trip_id, kind, date);
+create index if not exists expenses_owner_idx    on public.expenses (trip_id, owner_user_id);
+create index if not exists expense_shares_user_idx on public.expense_shares (user_id);
 
 -- ---------- 2. 觸發器 ----------
 
@@ -294,6 +338,18 @@ end $$;
 drop trigger if exists itinerary_touch on public.itinerary_entries;
 create trigger itinerary_touch before update on public.itinerary_entries
   for each row execute function public.stamp_entry();
+
+create or replace function public.stamp_expense()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  new.updated_at = now();
+  new.updated_by = auth.uid();
+  return new;
+end $$;
+
+drop trigger if exists expenses_touch on public.expenses;
+create trigger expenses_touch before update on public.expenses
+  for each row execute function public.stamp_expense();
 
 -- F-47：刪掉被行程引用的地點時，行程項目要保留，只斷開引用並把標題留下來。
 -- 這件事一定要在資料庫做，不能放前端：換一台裝置、或由另一個成員刪除時，
@@ -387,6 +443,25 @@ returns boolean language sql security definer set search_path = public stable as
   );
 $$;
 
+-- 記帳的可見／可改判斷。四條 policy 都是同一句話，抽出來才不會改了一個漏三個。
+-- 共同帳看成員資格，個人帳只看是不是本人 —— 離開專案的人仍讀得到自己的舊個人帳。
+create or replace function public.can_touch_expense(p_kind text, p_trip uuid, p_owner uuid)
+returns boolean language sql security definer set search_path = public stable as $$
+  select case when p_kind = 'group'
+              then public.is_trip_member(p_trip)
+              else p_owner = auth.uid() end;
+$$;
+
+-- 分攤的權限跟著母帳走。要 security definer：policy 裡直接子查詢 expenses
+-- 會再套一次 expenses 的 policy，兩張表互相引用就遞迴了。
+create or replace function public.can_touch_share(e uuid)
+returns boolean language sql security definer set search_path = public stable as $$
+  select exists (
+    select 1 from public.expenses x
+    where x.id = e and x.kind = 'group' and public.is_trip_member(x.trip_id)
+  );
+$$;
+
 -- ---------- 4. RLS ----------
 
 alter table public.profiles     enable row level security;
@@ -399,6 +474,8 @@ alter table public.items        enable row level security;
 alter table public.item_tags    enable row level security;
 alter table public.itinerary_entries enable row level security;
 alter table public.trip_days         enable row level security;
+alter table public.expenses          enable row level security;
+alter table public.expense_shares    enable row level security;
 
 -- 讓整份檔案可以重跑：先清掉既有 policy
 do $$
@@ -407,7 +484,7 @@ begin
   for r in
     select policyname, tablename from pg_policies
     where schemaname = 'public'
-      and tablename in ('profiles','trips','trip_members','invites','regions','tags','items','item_tags','itinerary_entries','trip_days')
+      and tablename in ('profiles','trips','trip_members','invites','regions','tags','items','item_tags','itinerary_entries','trip_days','expenses','expense_shares')
   loop
     execute format('drop policy %I on public.%I', r.policyname, r.tablename);
   end loop;
@@ -510,6 +587,36 @@ create policy itinerary_delete on public.itinerary_entries for delete
 create policy trip_days_all on public.trip_days for all
   using (public.is_trip_member(trip_id)) with check (public.is_trip_member(trip_id));
 
+-- 記帳：共同帳全員可讀可改（誰都可能幫忙補一筆），個人帳只有本人碰得到。
+-- 新增時額外要求 created_by 不能冒名，而且一定要是這個專案的 active 成員 ——
+-- 讀取那條刻意不查成員資格，離開專案的人還讀得到自己留下的個人帳。
+create policy expenses_select on public.expenses for select
+  using (public.can_touch_expense(kind, trip_id, owner_user_id));
+create policy expenses_insert on public.expenses for insert
+  with check (
+    public.is_trip_member(trip_id)
+    and created_by = auth.uid()
+    and (kind = 'group' or owner_user_id = auth.uid())
+  );
+create policy expenses_update on public.expenses for update
+  using (public.can_touch_expense(kind, trip_id, owner_user_id))
+  with check (public.can_touch_expense(kind, trip_id, owner_user_id));
+create policy expenses_delete on public.expenses for delete
+  using (public.can_touch_expense(kind, trip_id, owner_user_id));
+
+-- 分攤跟著母帳走。update 開給全員是刻意的：settled（這份付清了）任何成員都能勾，
+-- 不是只有當事人 —— 現場常常是誰收到錢誰就順手標起來。
+-- insert / delete 走 save_group_expense，但政策仍然開著：那支是 security invoker，
+-- 它的寫入一樣要通過這裡，沒有政策的話 RPC 自己也會被擋。
+create policy expense_shares_select on public.expense_shares for select
+  using (public.can_touch_share(expense_id));
+create policy expense_shares_insert on public.expense_shares for insert
+  with check (public.can_touch_share(expense_id));
+create policy expense_shares_update on public.expense_shares for update
+  using (public.can_touch_share(expense_id)) with check (public.can_touch_share(expense_id));
+create policy expense_shares_delete on public.expense_shares for delete
+  using (public.can_touch_share(expense_id));
+
 -- ---------- 5. RPC ----------
 
 -- F-03：建專案與寫入擁有者成員資格必須同一筆交易，否則中斷時會出現沒有成員的孤兒專案
@@ -588,6 +695,80 @@ begin
   values (inv.trip_id, auth.uid(), 'member', 'active')
   on conflict (trip_id, user_id) do update set status = 'active', left_at = null;
   return inv.trip_id;
+end $$;
+
+-- 記帳：共同帳的帳目與分攤一定要同一筆交易。只寫進帳目、分攤失敗的話，
+-- 這筆錢在畫面上就是「沒有人要付」，而且看不出哪裡壞掉。
+--
+-- 刻意用 security invoker（預設）：寫入照樣走 expenses / expense_shares 的
+-- policy，權限只有一個來源。下面那些檢查是為了給得出看得懂的錯誤訊息，
+-- 以及擋住 RLS 管不到的business rule（加總對不對、人在不在這個專案裡）。
+create or replace function public.save_group_expense(p_expense jsonb, p_shares jsonb)
+returns void language plpgsql set search_path = public as $$
+declare
+  v_id     uuid    := (p_expense ->> 'id')::uuid;
+  v_trip   uuid    := (p_expense ->> 'trip_id')::uuid;
+  v_amount numeric := (p_expense ->> 'amount')::numeric;
+  v_payer  uuid    := (p_expense ->> 'payer_id')::uuid;
+  v_total  numeric;
+begin
+  if not public.is_trip_member(v_trip) then raise exception 'not_member'; end if;
+  if p_shares is null or jsonb_array_length(p_shares) = 0 then
+    raise exception 'shares_required';
+  end if;
+
+  -- 加總必須剛好等於總額。差一塊錢就代表有人的份沒算進去，寧可擋下來讓使用者改，
+  -- 也不要默默存成一筆對不起來的帳 —— 那種錯誤要等分帳時才會被發現。
+  select sum((s ->> 'amount')::numeric) into v_total from jsonb_array_elements(p_shares) s;
+  if v_total is distinct from v_amount then
+    raise exception 'shares_total_mismatch: 分攤加總 % 不等於總額 %', v_total, v_amount;
+  end if;
+
+  -- 付款人與每個被分攤的人都要在這個專案裡。不限 active：已經離開的人
+  -- 舊帳裡還會出現，擋掉的話那些帳就再也編輯不了（§3.3）。
+  if not exists (select 1 from public.trip_members
+                 where trip_id = v_trip and user_id = v_payer) then
+    raise exception 'payer_not_member';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(p_shares) s
+    where not exists (
+      select 1 from public.trip_members m
+      where m.trip_id = v_trip and m.user_id = (s ->> 'user_id')::uuid)
+  ) then
+    raise exception 'share_user_not_member';
+  end if;
+
+  insert into public.expenses
+    (id, trip_id, kind, title, amount, currency, date, note, payer_id, created_by)
+  values (
+    v_id, v_trip, 'group',
+    p_expense ->> 'title', v_amount, p_expense ->> 'currency',
+    (p_expense ->> 'date')::date, coalesce(p_expense ->> 'note', ''),
+    v_payer, auth.uid())
+  on conflict (id) do update set
+    title    = excluded.title,
+    amount   = excluded.amount,
+    currency = excluded.currency,
+    date     = excluded.date,
+    note     = excluded.note,
+    payer_id = excluded.payer_id;
+    -- updated_at / updated_by 由 expenses_touch 觸發器蓋，不靠呼叫端填
+
+  -- 編輯時從名單上拿掉的人，分攤要跟著消失
+  delete from public.expense_shares sh
+  where sh.expense_id = v_id
+    and not exists (
+      select 1 from jsonb_array_elements(p_shares) s
+      where (s ->> 'user_id')::uuid = sh.user_id);
+
+  insert into public.expense_shares (expense_id, user_id, amount, settled)
+  select v_id, (s ->> 'user_id')::uuid, (s ->> 'amount')::numeric,
+         coalesce((s ->> 'settled')::boolean, false)
+  from jsonb_array_elements(p_shares) s
+  on conflict (expense_id, user_id) do update set
+    amount  = excluded.amount,
+    settled = excluded.settled;
 end $$;
 
 -- ---------- 6. Storage ----------
