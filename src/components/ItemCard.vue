@@ -24,7 +24,7 @@ const source = computed(() => {
 })
 const STATUS = { todo: '未買', bought: '已買', not_found: '沒買到' }
 
-// 參考（影片、貼文）。沒有縮圖、沒有狀態要勾，最重要的動作是「去看那支」，
+// 參考（影片、貼文）。沒有狀態要勾，最重要的動作是「去看那支」，
 // 所以每個連結直接攤成一顆可以點的按鈕，不用先進詳情頁再找連結。
 // 圖示依來源分，認不出來的就用一般連結圖示；判斷沿用 sourceLabel，不另寫一套。
 const isRef = computed(() => props.item.type === 'reference')
@@ -46,6 +46,13 @@ function fire(evt) {
       <RouterLink :to="`/trips/${item.tripId}/items/${item.id}`" class="min-w-0 flex-1">
         <h3 class="line-clamp-2 text-[16px] font-semibold leading-[1.35] tracking-tight wrap-anywhere">{{ item.title }}</h3>
         <p v-if="item.note" class="mt-1 line-clamp-2 whitespace-pre-line text-[13px] leading-relaxed text-muted">{{ item.note }}</p>
+        <!-- 參考圖（姿勢、構圖）一整排小縮圖，現場拿出來一眼就對得上；點了進詳情看大圖 -->
+        <div v-if="item.images.length" class="mt-2.5 flex gap-1.5">
+          <template v-for="im in item.images" :key="im.path">
+            <img v-if="imageOk(thumbOf(im))" :src="thumbOf(im)" alt="" loading="lazy"
+              class="size-14 shrink-0 rounded-lg bg-line object-cover" @error="imageBroken(thumbOf(im))" />
+          </template>
+        </div>
       </RouterLink>
       <button class="icon-btn size-8 shrink-0 text-muted" aria-label="更多動作" @click="$emit('menu')">
         <PhDotsThreeVertical :size="18" weight="bold" />

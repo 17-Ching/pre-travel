@@ -19,7 +19,7 @@ const KIND = {
     tag: '輸入分類，例：轉場影片、拍食物' },
 }
 const type = existing?.type ?? (KIND[route.query.type] ? route.query.type : 'place')
-// 參考不放圖：使用者要的是「點了去看那支影片」，卡片上也沒有縮圖格
+// 參考可以自己放圖（拍照姿勢、構圖），但不自動抓連結預覽圖，見 onUrl
 const isRef = type === 'reference'
 const qRegion = route.query.region
 const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
@@ -54,7 +54,7 @@ async function onUrl(l) {
   if (!d) return
   if (!f.value.title.trim()) f.value.title = d.title
   // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）。
-  // 參考不轉存：沒有地方顯示，上傳了只是佔 bucket 空間，之後還得靠孤兒檔掃描清掉
+  // 參考不自動轉存：參考的圖是使用者自己挑的姿勢、構圖，影片封面塞進來只會佔掉一格
   if (d.image && !isRef && !f.value.images.length) {
     try { f.value.images.push(track(await uploadImageFromDataUrl(tripId, d.image))) } catch { /* 有標題就夠用了 */ }
   }
@@ -145,8 +145,8 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
 
     </div>
 
-    <div v-if="!isRef">
-      <span class="label">圖片（最多 5 張）</span>
+    <div>
+      <span class="label">{{ isRef ? '參考圖（姿勢、構圖，最多 5 張）' : '圖片（最多 5 張）' }}</span>
       <div class="grid grid-cols-4 gap-2">
         <div v-for="(im, i) in f.images" :key="im.url" class="relative">
           <!-- 四欄的格子只有 80px 上下，跟卡片一樣吃縮圖就好，舊資料沒有才退回原圖 -->
