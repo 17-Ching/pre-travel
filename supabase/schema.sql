@@ -116,7 +116,8 @@ create table if not exists public.items (
 );
 -- 第三種子清單「參考」（YouTube 影片、IG 行程推薦這類）。既有資料庫的 CHECK 要換掉，
 -- 內容跟上面 create table 裡的一致。參考項目沿用既有欄位，沒有新欄位：
--- visited / purchase_status / planned_store / images 前端不會寫，維持預設值。
+-- visited / purchase_status / planned_store 前端不會寫，維持預設值。
+-- images 從 v2.3.0 起會寫（使用者自己上傳的姿勢、構圖參考圖），但不會自動轉存連結預覽圖。
 alter table public.items drop constraint if exists items_type_check;
 alter table public.items add constraint items_type_check check (type in ('place', 'shopping', 'reference'));
 
