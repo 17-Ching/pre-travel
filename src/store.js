@@ -205,7 +205,7 @@ const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 async function attachImageUrls() {
   const paths = [
     ...store.trips.map(t => t.coverPath),
-    ...store.items.flatMap(i => i.images.flatMap(im => [im.path, im.thumbPath])),
+    ...[...store.items, ...store.entries].flatMap(i => i.images.flatMap(im => [im.path, im.thumbPath])),
   ]
   const signed = await api.signPaths(paths)
   // 簽不出來（沒網路、storage 掛掉）就原封不動離開。signPaths 失敗是回空 Map 不是丟錯，
@@ -213,7 +213,7 @@ async function attachImageUrls() {
   // 重新整理為止。留著舊網址至少有機會還是好的，真的過期了畫面也有佔位圖接手。
   if (!signed.size && paths.some(Boolean)) return
   for (const t of store.trips) t.cover = signed.get(t.coverPath) || ''
-  for (const i of store.items) for (const im of i.images) {
+  for (const i of [...store.items, ...store.entries]) for (const im of i.images) {
     im.url = signed.get(im.path) || ''
     // 縮圖是後來才加的，舊資料沒有 thumbPath，這裡就是空字串，畫面那邊要退回 url
     im.thumbUrl = signed.get(im.thumbPath) || ''
@@ -379,9 +379,9 @@ export async function uploadItemImage(tripId, file, max = MAX.item) {
 // 項目救回畫面，但檔案已經沒了，使用者看到的是破圖。孤兒檔可以之後再掃，破圖回不來。
 //
 // 判斷依據是本地 store，所以前提是該專案的項目都已經載進來了（loadAll 會載齊
-// 專案內所有成員的項目，包含已離開成員留下的）。
+// 專案內所有成員的項目，包含已離開成員留下的）。行程自己打的地點也有圖，一起算活著。
 export function sweepImages(candidates) {
-  const gone = unusedPaths(candidates, store.items, store.trips.map(t => t.coverPath))
+  const gone = unusedPaths(candidates, [...store.items, ...store.entries], store.trips.map(t => t.coverPath))
   if (gone.length) api.removeImages(gone)
 }
 
@@ -746,7 +746,9 @@ export const dayNote = (tripId, date) =>
 // 引用的是活的資料（Q10）：被引用項目改標題或換照片，行程跟著變。
 // F-47 斷開引用後 title 變成快照，這兩支負責把判斷收在一個地方。
 export const entryTitle = e => (e.itemId ? item(e.itemId)?.title || e.title : e.title)
-export const entryThumb = e => thumbOf(e.itemId ? item(e.itemId)?.images?.[0] : null)
+// 自己打的地點用自己的圖；引用清單的照片跟著清單走
+export const entryImages = e => (e.images?.length ? e.images : (e.itemId && item(e.itemId)?.images) || [])
+export const entryThumb = e => thumbOf(entryImages(e)[0])
 // 「使用者自己打的」和「引用被刪掉後斷開的」資料長得一模一樣，
 // item_id 都是 null、title 都有值，所以必須靠資料庫留下的記號來分，
 // 前端推不出來。detached_at 由 F-47 的觸發器寫入。
@@ -774,7 +776,7 @@ function buildEntry(d, order) {
     links: d.links ?? [],
     transportMode: d.transportMode ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
-    note: d.note ?? '', passengerIds: d.passengerIds ?? [], done: false, order,
+    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], done: false, order,
     detachedAt: null,
     createdBy: store.me, updatedBy: store.me,
     createdAt: now(), updatedAt: now(),
@@ -821,7 +823,9 @@ export function addEntries(list) {
 export function updateEntry(entry, patch) {
   const before = { ...entry }
   Object.assign(entry, patch, { updatedAt: now(), updatedBy: store.me })
-  push(() => api.updateEntry(entry.id, patch), () => Object.assign(entry, before))
+  // 編輯時拿掉的圖會變孤兒檔，跟 saveItem 一樣等寫入成功再掃
+  push(() => api.updateEntry(entry.id, patch).then(() => 'images' in patch && sweepImages(imagePaths(before.images))),
+    () => Object.assign(entry, before))
 }
 
 // D1：勾完成時，若引用的是自己的地點就同步 visited。
@@ -875,7 +879,7 @@ export function deleteEntry(id) {
   const i = store.entries.findIndex(e => e.id === id)
   if (i < 0) return
   const [removed] = store.entries.splice(i, 1)
-  push(() => api.deleteEntry(id), () => store.entries.splice(i, 0, removed))
+  push(() => api.deleteEntry(id).then(() => sweepImages(imagePaths(removed.images))), () => store.entries.splice(i, 0, removed))
 }
 
 // F-43：空備註不留資料列，清空等於刪掉那一筆

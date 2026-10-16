@@ -1,12 +1,13 @@
 <script setup>
 import { computed } from 'vue'
-import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed } from '@phosphor-icons/vue'
+import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus } from '@phosphor-icons/vue'
 import { entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
 // badge：住宿用來標「入住 / 第 2 晚 / 退房・共 3 晚」，由呼叫端算好（它才知道現在看的是哪天）
 const props = defineProps({ entry: Object, badge: String })
-defineEmits(['toggle', 'menu'])
+// add-leg：交通那條最右邊的小加號，在它後面再接一段（轉乘）
+defineEmits(['toggle', 'menu', 'add-leg'])
 
 const title = computed(() => entryTitle(props.entry))
 const thumb = computed(() => entryThumb(props.entry))
@@ -64,8 +65,12 @@ const timeLabel = computed(() => {
         <span v-if="entry.note" class="mt-0.5 line-clamp-1 block text-[12px] text-muted">{{ entry.note }}</span>
       </span>
     </button>
-    <button class="icon-btn size-7 shrink-0 text-muted" aria-label="更多動作" @click="$emit('menu')">
-      <PhDotsThreeVertical :size="15" weight="bold" />
+    <!-- 整條本身就是開抽屜的按鈕，不另放「⋯」，右邊只留接下一段的加號 -->
+    <!-- mr-3：跟上下地點卡片的打勾鈕對齊在同一條直線上，不貼著邊 -->
+    <button class="icon-btn mr-3 size-7 shrink-0 text-tint" :aria-label="`在「${title}」後面再加一段交通`" @click="$emit('add-leg')">
+      <span class="flex size-[18px] items-center justify-center rounded-full border border-dashed border-tint/60">
+        <PhPlus :size="10" weight="bold" />
+      </span>
     </button>
   </article>
 

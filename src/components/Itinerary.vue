@@ -1,15 +1,17 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPencilSimple, PhWarning,
-  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed } from '@phosphor-icons/vue'
+  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy } from '@phosphor-icons/vue'
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
   dayNote, setDayNote, addEntry, addEntries, updateEntry,
   toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
-  regionsOf, user, me, tripMembers, item as findItem, newLink, linkLabel, sourceLabel, MAX_LINKS } from '../store'
+  regionsOf, user, me, tripMembers, item as findItem, newLink, linkLabel, sourceLabel, MAX_LINKS, thumbOf, imageOk, imageBroken, entryImages } from '../store'
 import { useLinkPreview } from '../link-preview'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
+import ImagePicker from './ImagePicker.vue'
+import ImageZoom from './ImageZoom.vue'
 
 const props = defineProps({ tripId: String })
 
@@ -70,7 +72,7 @@ function saveNote() { setDayNote(props.tripId, date.value, noteDraft.value); not
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
 const ARROW = ' → '
 const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [],
-  passengerIds: [], startDate: '', endDate: '', from: '', to: '' })
+  passengerIds: [], images: [], startDate: '', endDate: '', from: '', to: '' })
 const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
 const MODES = ['步行', '電車', '巴士', '計程車', '開車', '飛機', '船']
@@ -95,10 +97,14 @@ function openEdit(entry) {
   form.value = { title: entry.itemId ? '' : entry.title, kind: entry.kind, transportMode: entry.transportMode || '',
     startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
     links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])],
+    images: JSON.parse(JSON.stringify(entry.images ?? [])),
     startDate: entry.date, endDate: entry.endDate || '', from, to }
   formFor.value = { entry }
 }
 const editingRef = computed(() => Boolean(formFor.value?.entry?.itemId)) // 引用的項目標題不可改（F-38）
+// 只有自己打的地點有自己的圖。引用清單的照片跟著清單走（Q10），航班、住宿、交通不放圖
+const hasImages = computed(() => form.value.kind === 'place' && !editingRef.value)
+const picker = ref()
 const isFlight = computed(() => form.value.kind === 'flight')
 const isStay = computed(() => form.value.kind === 'stay')
 // 航班（紅眼）與住宿（隔天退房）的「結束」本來就在隔天，其他項目不行
@@ -122,12 +128,13 @@ const canSaveForm = computed(() => !badTimes.value && !badStayRange.value
   && (editingRef.value || composedTitle.value.length > 0))
 // 連結在行程這一側是自己的一份，改了不會回寫清單。
 // 但讀標題的方式跟清單一樣（F-14，共用 useLinkPreview）：貼上就自動填連結標題，
-// 標題還空著的話連項目標題一起帶。行程沒有圖片欄位，所以不動預覽圖。
+// 標題還空著的話連項目標題一起帶；自己打的地點還沒放圖時，預覽圖轉存成第一張。
 const { previews, load: loadPreview } = useLinkPreview()
 function addFormLink() { if (form.value.links.length < MAX_LINKS) form.value.links.push(newLink()) }
 async function onUrl(l) {
   const d = await loadPreview(l)
   if (d && !editingRef.value && !form.value.title.trim()) form.value.title = d.title
+  if (d?.image && hasImages.value) picker.value?.addFromPreview(d.image)
 }
 // paste 事件當下 input 的值還是舊的，要等瀏覽器寫進去才讀得到
 const onPaste = l => setTimeout(() => onUrl(l))
@@ -147,6 +154,7 @@ function submitForm() {
     startTime: f.startTime || null, endTime: f.endTime || null, note: f.note.trim(),
     links: f.links.filter(l => l.url.trim()),
     passengerIds: f.kind === 'flight' ? [...f.passengerIds] : [],
+    images: hasImages.value ? f.images : [],
     // 住宿是唯一自己帶日期區間的：編輯時連入住日一起改，不走「搬到其他天」
     ...(isStay.value ? { date: stayStart.value, endDate: f.endDate } : {}),
   }
@@ -179,6 +187,15 @@ function openTransportAfter(slot, prev) {
 
 // ── 卡片選單：編輯 / 上下移 / 搬到其他天 / 刪除
 const entryMenu = ref(null)
+const menuImages = computed(() => (entryMenu.value ? entryImages(entryMenu.value) : []))
+const zoom = ref()
+// 到了現場要把店名貼進 Google Maps 搜尋，手機上長按選字很難選準，給一顆按鈕
+async function copyTitle() {
+  try {
+    await navigator.clipboard.writeText(entryTitle(entryMenu.value))
+    toast('已複製，可以貼到地圖搜尋')
+  } catch { toast('複製失敗，可以長按標題自己選') }
+}
 // 搬到其他天。要搬的項目與選好的目的地分開放 ——
 // 原本是把選好的日期寫回 moveFor（moveFor = { ...moveFor, date }），那個展開會做出一份
 // 跟 store 脫鉤的普通物件，doMove 交給 moveEntry 的就不是畫面上那一筆，
@@ -404,11 +421,12 @@ const addFor = ref(null)
             </div>
             <div v-if="s.entries.length" class="grid gap-2">
               <template v-for="(e, i) in s.entries" :key="e.id">
-                <EntryCard :entry="e" @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
-                <!-- 每一筆後面都能插一段交通，包含最後一筆 —— 早上的最後一個點到下午的
+                <EntryCard :entry="e" @toggle="toggleEntryDone(e)" @menu="entryMenu = e" @add-leg="openTransportAfter(s.slot, e)" />
+                <!-- 每個地點後面都能插一段交通，包含最後一筆 —— 早上的最後一個點到下午的
                      第一個點之間也要移動，那段就加在這個時段的尾巴。
-                     只有「下一筆已經是交通」時不放，那個空隙已經有東西了。 -->
-                <button v-if="i === s.entries.length - 1 || s.entries[i + 1].kind !== 'transport'"
+                     已經有交通就不放（使用者反映整排虛線太吵）：下一筆是交通，或這筆本身就是交通。
+                     要轉乘第二段，從交通那條最右邊的小加號加。 -->
+                <button v-if="e.kind !== 'transport' && (i === s.entries.length - 1 || s.entries[i + 1].kind !== 'transport')"
                   class="flex items-center gap-2 py-0.5" :disabled="store.offline"
                   :aria-label="`在「${entryTitle(e)}」後面加一段交通`"
                   @click="openTransportAfter(s.slot, e)">
@@ -492,6 +510,9 @@ const addFor = ref(null)
         <p v-else class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
           這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走；下面的備註與連結只屬於行程這一筆。
         </p>
+
+        <!-- formFor 也要擋：抽屜關掉時拆掉它，才會清掉上傳了卻沒存的圖 -->
+        <ImagePicker v-if="formFor && hasImages" ref="picker" :images="form.images" :trip-id="tripId" />
 
         <div v-if="isFlight">
           <label class="label" for="e-mode">航空公司與班次</label>
@@ -580,7 +601,20 @@ const addFor = ref(null)
     </Sheet>
 
     <!-- 卡片選單 -->
-    <Sheet :open="!!entryMenu" :title="entryMenu ? entryTitle(entryMenu) : ''" @update:open="v => !v && (entryMenu = null)">
+    <Sheet :open="!!entryMenu" @update:open="v => !v && (entryMenu = null)">
+      <!-- 標題放大，旁邊一顆複製：現場要貼到地圖搜尋 -->
+      <div v-if="entryMenu" class="mb-2 flex items-start gap-2 px-3">
+        <h2 class="min-w-0 flex-1 select-text pt-1 text-[19px] font-semibold leading-snug wrap-anywhere">{{ entryTitle(entryMenu) }}</h2>
+        <button class="icon-btn shrink-0 text-muted" aria-label="複製標題" @click="copyTitle"><PhCopy :size="20" /></button>
+      </div>
+      <!-- 卡片上只有一張小縮圖，抽屜裡整排攤開，點了放大看。引用清單的照片也在這裡 -->
+      <div v-if="menuImages.length" class="mb-2 flex gap-2 overflow-x-auto px-3">
+        <template v-for="(im, i) in menuImages" :key="im.path">
+          <button v-if="imageOk(thumbOf(im))" class="shrink-0 cursor-zoom-in" :aria-label="`放大第 ${i + 1} 張照片`" @click="zoom.open(i)">
+            <img :src="thumbOf(im)" alt="" class="size-20 rounded-lg bg-line object-cover" @error="imageBroken(thumbOf(im))" />
+          </button>
+        </template>
+      </div>
       <!-- 卡片上的備註是截斷的，抽屜裡給完整內容 -->
       <p v-if="entryMenu?.note" class="mb-1 max-h-48 overflow-auto whitespace-pre-line border-b border-line px-3 pb-3 text-[14px] leading-relaxed text-muted">{{ entryMenu.note }}</p>
       <!-- 真的 <a>：手機上 Google Maps 連結要能跳到地圖 App（F-15） -->
@@ -621,6 +655,8 @@ const addFor = ref(null)
       </button>
       <p v-if="store.offline" class="px-3 pb-1 pt-2 text-[13px] text-muted">離線中，只能勾選完成</p>
     </Sheet>
+
+    <ImageZoom ref="zoom" :images="menuImages" :alt="entryMenu ? entryTitle(entryMenu) : ''" />
 
     <!-- 搬到其他天／時段（取代跨日拖曳） -->
     <Sheet :open="!!moveFor" title="搬到" @update:open="v => !v && (moveFor = null)">

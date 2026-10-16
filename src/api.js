@@ -50,10 +50,14 @@ const toEntry = r => ({
   startTime: hhmm(r.start_time), endTime: hhmm(r.end_time),
   links: r.links ?? [], note: r.note ?? '', done: r.done, order: r.sort_order,
   passengerIds: r.passenger_ids ?? [],
+  images: r.images ?? [],
   detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
 })
+
+// thumbPath 一定要跟著寫回去（同 itemRow），簽名網址剝掉
+const imagesRow = images => (images ?? []).map(({ path, thumbPath, w, h }) => ({ path, thumbPath, w, h }))
 
 const entryRow = e => ({
   trip_id: e.tripId,
@@ -70,6 +74,7 @@ const entryRow = e => ({
   end_time: e.endTime || null,
   note: (e.note ?? '').slice(0, 2000),
   passenger_ids: e.passengerIds ?? [],
+  images: imagesRow(e.images),
   done: Boolean(e.done),
   sort_order: e.order ?? 0,
 })
@@ -101,7 +106,7 @@ const itemRow = i => ({
   region_id: i.regionId || null,
   links: (i.links ?? []).filter(l => l.url?.trim()),
   // thumbPath 一定要跟著寫回去，這是 jsonb，漏一個欄位就等於永久丟掉那張縮圖
-  images: (i.images ?? []).map(({ path, thumbPath, w, h }) => ({ path, thumbPath, w, h })),
+  images: imagesRow(i.images),
   note: (i.note ?? '').slice(0, 2000),
   visited: Boolean(i.visited),
   purchase_status: i.status ?? 'todo',
@@ -331,6 +336,7 @@ export async function updateEntry(id, patch) {
   if ('links' in patch) row.links = (patch.links ?? []).filter(l => l.url?.trim())
   if ('note' in patch) row.note = (patch.note ?? '').slice(0, 2000)
   if ('passengerIds' in patch) row.passenger_ids = patch.passengerIds ?? []
+  if ('images' in patch) row.images = imagesRow(patch.images)
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done
   if ('date' in patch) row.date = patch.date
