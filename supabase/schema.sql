@@ -160,6 +160,8 @@ create table if not exists public.itinerary_entries (
   end_time       time,
   -- 上限跟 items.note 一樣：清單的備註會整段複製過來，500 會被截斷
   note           text not null default '' check (char_length(note) <= 2000),
+  -- v2.4.0：自己打的地點可以放圖，格式同 items.images（[{ path, thumbPath, w, h }]）
+  images         jsonb not null default '[]'::jsonb,
   done           boolean not null default false,
   sort_order     int not null default 0,
   created_by     uuid not null references public.profiles on delete cascade,
@@ -185,7 +187,10 @@ create table if not exists public.itinerary_entries (
   ),
   -- 紅眼航班（23:05 起飛、隔天 05:30 抵達）與住宿（15:00 入住、隔天 11:00 退房）
   -- 的「結束」本來就在隔天，只有這兩種放行 end < start
-  constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind in ('flight', 'stay'))
+  constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind in ('flight', 'stay')),
+  -- v2.4.0：自己打的地點可以放圖。引用清單的那種照片跟著清單項目走（Q10），
+  -- 兩邊都存會變成同一個地點出現兩組照片，而且刪清單項目時這邊會留下孤兒檔。
+  constraint quoted_entry_has_no_images check (item_id is null or images = '[]'::jsonb)
 );
 
 -- TripDay：只在真的寫備註時才會有資料列（PRD §4.1）
@@ -217,6 +222,11 @@ alter table public.itinerary_entries add constraint stay_has_range check (
   or (kind <> 'stay' and end_date is null));
 alter table public.itinerary_entries drop constraint if exists end_after_start;
 alter table public.itinerary_entries add constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind in ('flight', 'stay'));
+-- 行程的圖片（v2.4.0）。引用清單的那種不自己存圖，照片跟著清單項目走
+alter table public.itinerary_entries add column if not exists images jsonb not null default '[]'::jsonb;
+alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_images;
+alter table public.itinerary_entries add constraint quoted_entry_has_no_images
+  check (item_id is null or images = '[]'::jsonb);
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 

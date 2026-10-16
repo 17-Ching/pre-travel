@@ -293,6 +293,23 @@ select denied(
          :'trip_id', '2026-11-13', 'schedule', 'evening', :'ruby'),
   '沒有引用就必須自己有標題');
 
+-- v2.4.0 行程圖片：自己打的地點可以放，引用清單的那種不行（照片跟著清單項目走，Q10）。
+-- 驗完自己刪掉，後面有斷言在數 itinerary_entries 的筆數。
+insert into itinerary_entries (trip_id, date, section, slot, title, images, created_by)
+values (:'trip_id', '2026-11-13', 'schedule', 'evening', '自己打的夜景點',
+        '[{"path":"t/a.jpg","thumbPath":"t/a-s.jpg","w":1600,"h":1200}]'::jsonb, :'ruby');
+do $$ begin
+  perform ok((select jsonb_array_length(images) from itinerary_entries
+              where title = '自己打的夜景點') = 1,
+    '自己打的地點可以放圖片');
+end $$;
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, item_id, images, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
+         '[{"path":"t/b.jpg"}]', :'ruby'),
+  '引用清單的行程項目不能自己存圖');
+delete from itinerary_entries where title = '自己打的夜景點';
+
 -- D1：勾完成時只同步自己的地點
 select id as ref_entry from itinerary_entries where item_id = :'jean_item' \gset
 update itinerary_entries set done = true where id = :'ref_entry';
