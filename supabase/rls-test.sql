@@ -308,6 +308,21 @@ select denied(
          :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
          '[{"path":"t/b.jpg"}]', :'ruby'),
   '引用清單的行程項目不能自己存圖');
+
+-- v2.5.0 行程地區：同樣只有自己打的地點可以選，引用清單的跟著清單項目走
+select id as tokyo_id from regions where name = '東京' \gset
+update itinerary_entries set region_id = :'tokyo_id'
+where title = '自己打的夜景點';
+do $$ begin
+  perform ok((select region_id from itinerary_entries where title = '自己打的夜景點') is not null,
+    '自己打的地點可以選地區');
+end $$;
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, item_id, region_id, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
+         :'tokyo_id', :'ruby'),
+  '引用清單的行程項目不能自己選地區');
+
 delete from itinerary_entries where title = '自己打的夜景點';
 
 -- D1：勾完成時只同步自己的地點

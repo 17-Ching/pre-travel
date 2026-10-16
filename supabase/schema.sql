@@ -162,6 +162,9 @@ create table if not exists public.itinerary_entries (
   note           text not null default '' check (char_length(note) <= 2000),
   -- v2.4.0：自己打的地點可以放圖，格式同 items.images（[{ path, thumbPath, w, h }]）
   images         jsonb not null default '[]'::jsonb,
+  -- v2.5.0：自己打的地點也能選地區。on delete set null 跟 items.region_id 一樣，
+  -- 地區被刪掉只是變成沒有地區，不會連帶刪掉行程那筆
+  region_id      uuid references public.regions on delete set null,
   done           boolean not null default false,
   sort_order     int not null default 0,
   created_by     uuid not null references public.profiles on delete cascade,
@@ -190,7 +193,10 @@ create table if not exists public.itinerary_entries (
   constraint end_after_start check (end_time is null or start_time is null or end_time >= start_time or kind in ('flight', 'stay')),
   -- v2.4.0：自己打的地點可以放圖。引用清單的那種照片跟著清單項目走（Q10），
   -- 兩邊都存會變成同一個地點出現兩組照片，而且刪清單項目時這邊會留下孤兒檔。
-  constraint quoted_entry_has_no_images check (item_id is null or images = '[]'::jsonb)
+  constraint quoted_entry_has_no_images check (item_id is null or images = '[]'::jsonb),
+  -- v2.5.0：同理，引用清單的那種地區也跟著清單項目走（前端讀 items.region_id），
+  -- 自己再存一份就會有兩個可能互相矛盾的地區
+  constraint quoted_entry_has_no_region check (item_id is null or region_id is null)
 );
 
 -- TripDay：只在真的寫備註時才會有資料列（PRD §4.1）
@@ -227,6 +233,11 @@ alter table public.itinerary_entries add column if not exists images jsonb not n
 alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_images;
 alter table public.itinerary_entries add constraint quoted_entry_has_no_images
   check (item_id is null or images = '[]'::jsonb);
+-- 行程的地區（v2.5.0）。引用清單的那種地區跟著清單項目走
+alter table public.itinerary_entries add column if not exists region_id uuid references public.regions on delete set null;
+alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_region;
+alter table public.itinerary_entries add constraint quoted_entry_has_no_region
+  check (item_id is null or region_id is null);
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 
