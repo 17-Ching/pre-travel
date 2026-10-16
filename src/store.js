@@ -500,7 +500,8 @@ export function moveRegion(r, dir) {
 }
 export function deleteRegion(r) {
   const i = store.regions.indexOf(r)
-  const affected = store.items.filter(x => x.regionId === r.id)
+  // 清單項目與行程自己打的地點都可能掛著這個地區（資料庫是 on delete set null）
+  const affected = [...store.items, ...store.entries].filter(x => x.regionId === r.id)
   affected.forEach(x => { x.regionId = null })
   store.regions.splice(i, 1)
   push(() => api.deleteRegion(r.id), () => {
@@ -776,7 +777,7 @@ function buildEntry(d, order) {
     links: d.links ?? [],
     transportMode: d.transportMode ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
-    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], done: false, order,
+    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], regionId: d.regionId ?? null, done: false, order,
     detachedAt: null,
     createdBy: store.me, updatedBy: store.me,
     createdAt: now(), updatedAt: now(),

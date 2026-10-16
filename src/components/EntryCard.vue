@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus } from '@phosphor-icons/vue'
-import { entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
+import { store, item, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
 // badge：住宿用來標「入住 / 第 2 晚 / 退房・共 3 晚」，由呼叫端算好（它才知道現在看的是哪天）
@@ -12,6 +12,12 @@ defineEmits(['toggle', 'menu', 'add-leg'])
 const title = computed(() => entryTitle(props.entry))
 const thumb = computed(() => entryThumb(props.entry))
 const detached = computed(() => entryDetached(props.entry))
+// 自己打的用自己的地區，引用清單的跟著清單項目走。餐食備選常常一餐列好幾區的店，
+// 標出來才知道今天人在京都時該從哪幾間挑
+const region = computed(() => {
+  const id = props.entry.itemId ? item(props.entry.itemId)?.regionId : props.entry.regionId
+  return id ? store.regions.find(r => r.id === id)?.name : ''
+})
 const isFlight = computed(() => props.entry.kind === 'flight')
 const isStay = computed(() => props.entry.kind === 'stay')
 // 航班跟住宿共用同一套卡片外觀（左側直線 + 淡底），只有圖示與副標不同
@@ -100,9 +106,10 @@ const timeLabel = computed(() => {
           {{ badge }}
         </span>
         <span v-if="timeLabel"
-          class="mb-1 inline-flex items-center rounded-md bg-accent-soft px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-accent">
+          class="mb-1 mr-1.5 inline-flex items-center rounded-md bg-accent-soft px-1.5 py-0.5 text-[11px] font-bold tabular-nums text-accent">
           {{ timeLabel }}
         </span>
+        <span v-if="region" class="mb-1 inline-flex items-center rounded-md bg-tint-soft px-1.5 py-0.5 text-[11px] font-medium text-tint">{{ region }}</span>
         <span :class="['line-clamp-2 text-[15px] font-semibold leading-snug wrap-anywhere', entry.done && 'line-through decoration-1']">{{ title }}</span>
         <span v-if="isTransport && entry.transportMode" class="mt-0.5 block truncate text-[12px] text-tint">{{ entry.transportMode }}</span>
         <!-- 同一天好幾班時，靠這排頭像分辨誰搭哪一班 -->

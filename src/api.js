@@ -51,6 +51,7 @@ const toEntry = r => ({
   links: r.links ?? [], note: r.note ?? '', done: r.done, order: r.sort_order,
   passengerIds: r.passenger_ids ?? [],
   images: r.images ?? [],
+  regionId: r.region_id ?? null,
   detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
@@ -75,6 +76,7 @@ const entryRow = e => ({
   note: (e.note ?? '').slice(0, 2000),
   passenger_ids: e.passengerIds ?? [],
   images: imagesRow(e.images),
+  region_id: e.regionId || null,
   done: Boolean(e.done),
   sort_order: e.order ?? 0,
 })
@@ -337,6 +339,7 @@ export async function updateEntry(id, patch) {
   if ('note' in patch) row.note = (patch.note ?? '').slice(0, 2000)
   if ('passengerIds' in patch) row.passenger_ids = patch.passengerIds ?? []
   if ('images' in patch) row.images = imagesRow(patch.images)
+  if ('regionId' in patch) row.region_id = patch.regionId || null
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done
   if ('date' in patch) row.date = patch.date

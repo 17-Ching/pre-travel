@@ -5,7 +5,7 @@ import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPen
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
   dayNote, setDayNote, addEntry, addEntries, updateEntry,
   toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
-  regionsOf, user, me, tripMembers, item as findItem, newLink, linkLabel, sourceLabel, MAX_LINKS, thumbOf, imageOk, imageBroken, entryImages } from '../store'
+  regionsOf, addRegion, user, me, tripMembers, item as findItem, newLink, linkLabel, sourceLabel, MAX_LINKS, thumbOf, imageOk, imageBroken, entryImages } from '../store'
 import { useLinkPreview } from '../link-preview'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
@@ -72,7 +72,7 @@ function saveNote() { setDayNote(props.tripId, date.value, noteDraft.value); not
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
 const ARROW = ' → '
 const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [],
-  passengerIds: [], images: [], startDate: '', endDate: '', from: '', to: '' })
+  passengerIds: [], images: [], regionId: '', startDate: '', endDate: '', from: '', to: '' })
 const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
 const MODES = ['步行', '電車', '巴士', '計程車', '開車', '飛機', '船']
@@ -97,13 +97,20 @@ function openEdit(entry) {
   form.value = { title: entry.itemId ? '' : entry.title, kind: entry.kind, transportMode: entry.transportMode || '',
     startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
     links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])],
-    images: JSON.parse(JSON.stringify(entry.images ?? [])),
+    images: JSON.parse(JSON.stringify(entry.images ?? [])), regionId: entry.regionId ?? '',
     startDate: entry.date, endDate: entry.endDate || '', from, to }
   formFor.value = { entry }
 }
 const editingRef = computed(() => Boolean(formFor.value?.entry?.itemId)) // 引用的項目標題不可改（F-38）
-// 只有自己打的地點有自己的圖。引用清單的照片跟著清單走（Q10），航班、住宿、交通不放圖
+// 只有自己打的地點有自己的圖與地區。引用清單的照片、地區跟著清單走（Q10），航班、住宿、交通都沒有
 const hasImages = computed(() => form.value.kind === 'place' && !editingRef.value)
+// 地區選單跟清單表單同一套：最後一個選項是當場新增
+function onRegion(e) {
+  if (e.target.value !== '__new') return (form.value.regionId = e.target.value)
+  const r = addRegion(props.tripId, prompt('新地區名稱') || '')
+  form.value.regionId = r?.id ?? ''
+  e.target.value = form.value.regionId
+}
 const picker = ref()
 const isFlight = computed(() => form.value.kind === 'flight')
 const isStay = computed(() => form.value.kind === 'stay')
@@ -155,6 +162,7 @@ function submitForm() {
     links: f.links.filter(l => l.url.trim()),
     passengerIds: f.kind === 'flight' ? [...f.passengerIds] : [],
     images: hasImages.value ? f.images : [],
+    regionId: hasImages.value ? f.regionId || null : null,
     // 住宿是唯一自己帶日期區間的：編輯時連入住日一起改，不走「搬到其他天」
     ...(isStay.value ? { date: stayStart.value, endDate: f.endDate } : {}),
   }
@@ -512,6 +520,15 @@ const addFor = ref(null)
         </p>
 
         <!-- formFor 也要擋：抽屜關掉時拆掉它，才會清掉上傳了卻沒存的圖 -->
+        <div v-if="hasImages">
+          <label class="label" for="e-region">地區（選填）</label>
+          <select id="e-region" class="input" :value="form.regionId" @change="onRegion">
+            <option value="">未分類</option>
+            <option v-for="r in regions" :key="r.id" :value="r.id">{{ r.name }}</option>
+            <option value="__new">＋ 新增地區…</option>
+          </select>
+        </div>
+
         <ImagePicker v-if="formFor && hasImages" ref="picker" :images="form.images" :trip-id="tripId" />
 
         <div v-if="isFlight">
