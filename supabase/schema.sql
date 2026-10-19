@@ -199,8 +199,8 @@ create table if not exists public.itinerary_entries (
   constraint quoted_entry_has_no_region check (item_id is null or region_id is null)
 );
 
--- TripDay：備註和連結都空才不留資料列（PRD §4.1 的 F-43；v2.7.0 加了連結之後，
--- 「只有連結、note 是空字串」是合法狀態，不要再把空備註當成該刪掉的列）
+-- TripDay：備註、連結、引用的參考三個都空才不留資料列（PRD §4.1 的 F-43）。
+-- v2.7.0 之後「note 是空字串但有連結或有引用」是合法狀態，不要把空備註當成該刪的列。
 create table if not exists public.trip_days (
   trip_id    uuid not null references public.trips on delete cascade,
   date       date not null,
@@ -208,12 +208,18 @@ create table if not exists public.trip_days (
   -- v2.7.0：每天的備註也能放有標題的連結，格式同 itinerary_entries.links
   -- （[{ id, url, title }]，上限 5 個由前端擋，跟行程項目一致）
   links      jsonb not null default '[]'::jsonb,
+  -- v2.7.0：引用願望清單的「參考」（那天要拍哪幾支 reels）。存 id、畫面讀當下的
+  -- 標題與照片，跟 Q10 行程引用清單項目同一個概念。
+  -- 陣列設不了外鍵，跟 passenger_ids 一樣靠前端處理查不到的 id（不顯示）。
+  -- 這裡只存 id，實際內容仍然要過 items 的 RLS 才讀得到，所以不會讓誰多看到東西。
+  ref_ids    uuid[] not null default '{}',
   updated_by uuid references public.profiles on delete set null,
   updated_at timestamptz not null default now(),
   primary key (trip_id, date)
 );
 -- 已經建過表的資料庫也要補上這一欄（create table if not exists 不會改既有的表）
 alter table public.trip_days add column if not exists links jsonb not null default '[]'::jsonb;
+alter table public.trip_days add column if not exists ref_ids uuid[] not null default '{}';
 alter table public.itinerary_entries add column if not exists detached_at timestamptz;
 alter table public.itinerary_entries add column if not exists links jsonb not null default '[]'::jsonb;
 -- 備註上限從 500 放寬到 2000，既有資料庫的 CHECK 要換掉

@@ -329,6 +329,32 @@ do $$ begin
 end $$;
 update trip_days set note = '住新宿，記得帶傘', links = '[]'::jsonb where date = '2026-11-13';
 
+-- v2.7.0：每日備註可以引用願望清單的「參考」（那天要拍哪幾支 reels）。
+-- 順便釘住一件事：這個欄位只有 id，引用不等於給了讀取權 —— 故意塞一個別人
+-- 讀不到的 gift id 進去，確認對方還是讀不到那筆 item。資料庫因此不需要驗證
+-- ref_ids 的內容（見 migrate-day-refs.sql 的說明）。
+insert into items (trip_id, owner_user_id, type, title, created_by)
+  values (:'trip_id', :'ruby', 'gift', 'reels 隱私探針', :'ruby');
+select id as probe_gift from items where title = 'reels 隱私探針' \gset
+update trip_days set ref_ids = array[:'probe_gift'::uuid] where date = '2026-11-13';
+do $$ begin
+  perform ok((select cardinality(ref_ids) from trip_days where date = '2026-11-13') = 1,
+    '每日備註可以引用參考');
+end $$;
+
+set app.uid = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform ok((select count(*) from trip_days where date = '2026-11-13') = 1,
+    '同行成員看得到那一天的備註');
+  perform ok((select count(*) from items where id = (
+               select unnest(ref_ids) from trip_days where date = '2026-11-13')) = 0,
+    '被引用的 id 仍然要過 items 的 RLS，引用不等於給了讀取權');
+end $$;
+
+set app.uid = '22222222-2222-2222-2222-222222222222';
+update trip_days set ref_ids = '{}' where date = '2026-11-13';
+delete from items where id = :'probe_gift';
+
 -- slot 與 section 的組合限制（PRD §4.1）
 select denied(
   format('insert into itinerary_entries (trip_id, date, section, slot, title, created_by) values (%L, %L, %L, %L, %L, %L)',
