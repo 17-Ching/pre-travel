@@ -99,7 +99,7 @@ create table if not exists public.items (
   trip_id         uuid not null references public.trips on delete cascade,
   -- v2.0：共同分頁移除（Q8，行程取代它），項目一定屬於某一個人的清單分頁
   owner_user_id   uuid not null references public.profiles on delete cascade,
-  type            text not null check (type in ('place', 'shopping', 'reference')),
+  type            text not null check (type in ('place', 'shopping', 'reference', 'gift')),
   title           text not null check (char_length(title) between 1 and 100),
   region_id       uuid references public.regions on delete set null,
   links           jsonb not null default '[]'::jsonb,
@@ -114,12 +114,12 @@ create table if not exists public.items (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
--- 第三種子清單「參考」（YouTube 影片、IG 行程推薦這類）。既有資料庫的 CHECK 要換掉，
+-- 第三種「參考」與第四種「送禮」（v2.6.0）。既有資料庫的 CHECK 要換掉，
 -- 內容跟上面 create table 裡的一致。參考項目沿用既有欄位，沒有新欄位：
 -- visited / purchase_status / planned_store 前端不會寫，維持預設值。
 -- images 從 v2.3.0 起會寫（使用者自己上傳的姿勢、構圖參考圖），但不會自動轉存連結預覽圖。
 alter table public.items drop constraint if exists items_type_check;
-alter table public.items add constraint items_type_check check (type in ('place', 'shopping', 'reference'));
+alter table public.items add constraint items_type_check check (type in ('place', 'shopping', 'reference', 'gift'));
 
 create table if not exists public.item_tags (
   item_id uuid not null references public.items on delete cascade,
@@ -455,6 +455,15 @@ returns boolean language sql security definer set search_path = public stable as
 $$;
 
 -- 可寫 = 專案成員，而且項目在共同分頁或自己的分頁（§3.2 他人分頁唯讀）
+-- v2.6.0 送禮清單只有本人看得到（同行的人可能就是收禮對象）。其餘三種維持
+-- 「成員互相看得到」。抽出來是因為 items 和 item_tags 兩邊都要用同一句話 ——
+-- 只改一邊的話，別人的 gift 會從標籤那條漏出去（「A 有一個標著『給媽媽』的東西」）。
+create or replace function public.item_visible(p_type text, p_trip uuid, p_owner uuid)
+returns boolean language sql security definer set search_path = public stable as $$
+  select public.is_trip_member(p_trip)
+     and (p_type <> 'gift' or p_owner = auth.uid());
+$$;
+
 create or replace function public.can_edit_item(i uuid)
 returns boolean language sql security definer set search_path = public stable as $$
   select exists (
@@ -560,7 +569,7 @@ create policy tags_write on public.tags for all
 
 -- items：成員全部可讀；寫入限共同分頁或自己的分頁
 create policy items_select on public.items for select
-  using (public.is_trip_member(trip_id));
+  using (public.item_visible(type, trip_id, owner_user_id));
 create policy items_insert on public.items for insert
   with check (
     public.is_trip_member(trip_id)
@@ -582,7 +591,8 @@ create policy items_delete on public.items for delete
 create policy item_tags_select on public.item_tags for select
   using (exists (
     select 1 from public.items it
-    where it.id = item_tags.item_id and public.is_trip_member(it.trip_id)
+    where it.id = item_tags.item_id
+      and public.item_visible(it.type, it.trip_id, it.owner_user_id)
   ));
 create policy item_tags_insert on public.item_tags for insert
   with check (

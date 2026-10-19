@@ -224,6 +224,47 @@ select denied(
   format('delete from tags where id = %L', :'jean_tag'),
   '看得到別人的標籤，但不能刪除');
 
+-- ── 送禮清單只有本人看得到（v2.6.0）──────────────────────────
+-- 同行的人可能就是收禮對象，所以 gift 這一種不跟著「成員互相看得到」。
+-- 驗完自己清掉，後面有斷言在數 items 的筆數。
+insert into items (trip_id, owner_user_id, type, title, created_by)
+  values (:'trip_id', :'ruby', 'gift', '送媽媽的珍珠項鍊', :'ruby');
+select id as ruby_gift from items where type = 'gift' \gset
+-- 順便掛一個標籤，等下驗 item_tags 不會從側面把 gift 漏出去
+insert into item_tags (item_id, tag_id)
+  select :'ruby_gift', id from tags where user_id = :'ruby' and name = '拉麵';
+do $$ begin
+  perform ok((select count(*) from items where type = 'gift') = 1, 'Ruby 看得到自己的送禮項目');
+end $$;
+update items set title = '改成絲巾' where id = :'ruby_gift';
+do $$ begin
+  perform ok((select title from items where id = (select id from items where type = 'gift')) = '改成絲巾',
+    'Ruby 改得動自己的送禮項目');
+end $$;
+
+set app.uid = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform ok((select count(*) from items where type = 'gift') = 0,
+    '同行成員看不到別人的送禮項目');
+  -- 這條是重點：item_tags 的 select 是 join items 判斷的，只改 items_select
+  -- 不改這裡的話，別人會從標籤關聯看出「A 有一個標著某某的東西」
+  perform ok((select count(*) from item_tags where item_id = (
+               select id from items where owner_user_id = '22222222-2222-2222-2222-222222222222'
+                 and type = 'gift')) = 0,
+    '別人的送禮項目不會從 item_tags 漏出去');
+  -- 其他三種照舊看得到，不要把整個清單一起鎖住
+  perform ok((select count(*) from items where type in ('place', 'shopping', 'reference')
+              and owner_user_id = '22222222-2222-2222-2222-222222222222') > 0,
+    '同行成員仍看得到對方的地點／購物／參考');
+end $$;
+select denied(
+  format('update items set title = %L where id = %L', '亂改別人的禮物', :'ruby_gift'),
+  '不能改別人的送禮項目');
+
+set app.uid = '22222222-2222-2222-2222-222222222222';
+delete from item_tags where item_id = :'ruby_gift';
+delete from items where id = :'ruby_gift';
+
 -- 標籤分兩池：參考的跟地點／購物的分開，同名要能各自獨立存在。
 -- 驗完一樣自己刪掉，後面有斷言在數 tags 的筆數。
 do $$ begin

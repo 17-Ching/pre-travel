@@ -92,12 +92,14 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 | 所有 API 檢查呼叫者是 active 成員 | `is_trip_member()` 被幾乎每條 policy 引用 | schema.sql |
 | 寫入個人分頁檢查 `owner_user_id = 呼叫者` | `items_insert` / `items_update` 的 `owner_user_id is null or owner_user_id = auth.uid()` | 同上 |
 | 共同分頁任何成員可增可刪（Q2） | 同上，`owner_user_id is null` 那一半 | 同上 |
+| 送禮清單只有本人看得到（v2.6.0） | `item_visible()`，items_select 與 item_tags_select 共用 | rls-test.sql |
 | 他人分頁唯讀（F-11） | 上面兩條的反面，已有測試覆蓋 | rls-test.sql |
 | 編輯／刪除專案限 owner | `trips_update` + `delete_trip` RPC 內的檢查 | 同上 |
 | 只能貼自己的標籤（§4.2） | `item_tags_insert` 同時檢查項目可寫與標籤屬於自己 | 同上 |
 | 標籤成員可讀、本人才可寫（F-22） | `tags_select`（成員）+ `tags_write`（本人） | 同上 |
 | 撤銷邀請：owner 全部，成員限自己產生的 | `invites_update` | 同上 |
 | 擁有者不能自行離開 | `owner_cannot_leave` CHECK 約束，不是 policy | 同上 |
+| 送禮清單只有本人看得到（v2.6.0） | `item_visible()`，`items_select` 與 `item_tags_select` 共用同一句判斷 | 同上 |
 | **行程**：任何 active 成員都能增刪改 | `itinerary_*` 四條、`trip_days_all` | 同上 |
 | **記帳**：共同帳全員可增刪改 | `expenses_*` 四條，判斷集中在 `can_touch_expense()` | 同上 |
 | 個人帳只有本人看得到、改得到 | 同上。讀取刻意不查成員資格，離開專案後仍讀得到自己的舊帳 | 同上 |
@@ -112,7 +114,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 81 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 87 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -258,7 +260,10 @@ supabase/
                         可以放圖。含 quoted_entry_has_no_images 約束。可重複執行
   migrate-entry-region.sql  itinerary_entries 加 region_id（v2.5.0），自己打的
                         地點也能選地區。含 quoted_entry_has_no_region 約束。可重複執行
-  rls-test.sql        權限驗證，81 項。跑在用完就丟的本機 Postgres
+  migrate-gift-items.sql  items 第四種 type = gift（v2.6.0，送禮清單），
+                        而且只有本人看得到：items_select 與 item_tags_select
+                        都改走 item_visible()。可重複執行
+  rls-test.sql        權限驗證，87 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址
