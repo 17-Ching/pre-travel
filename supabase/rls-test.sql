@@ -316,6 +316,19 @@ do $$ begin
   perform ok((select count(*) from trip_days) = 1, '成員可以寫每日備註');
 end $$;
 
+-- v2.7.0：每日備註也能放連結。重點是「只有連結、備註是空字串」要存得進去 ——
+-- F-43 的「沒備註就不留資料列」現在是前端的刪除條件，不是資料庫的約束。
+update trip_days set note = '',
+  links = '[{"id":"l1","url":"https://ex.test/a","title":"雨天備案"}]'::jsonb
+where date = '2026-11-13';
+do $$ begin
+  perform ok((select jsonb_array_length(links) from trip_days where date = '2026-11-13') = 1,
+    '每日備註可以放連結');
+  perform ok((select note from trip_days where date = '2026-11-13') = '',
+    '只有連結、備註留空也存得進去');
+end $$;
+update trip_days set note = '住新宿，記得帶傘', links = '[]'::jsonb where date = '2026-11-13';
+
 -- slot 與 section 的組合限制（PRD §4.1）
 select denied(
   format('insert into itinerary_entries (trip_id, date, section, slot, title, created_by) values (%L, %L, %L, %L, %L, %L)',

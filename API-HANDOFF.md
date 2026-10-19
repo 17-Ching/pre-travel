@@ -114,7 +114,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 87 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 89 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -263,7 +263,9 @@ supabase/
   migrate-gift-items.sql  items 第四種 type = gift（v2.6.0，送禮清單），
                         而且只有本人看得到：items_select 與 item_tags_select
                         都改走 item_visible()。可重複執行
-  rls-test.sql        權限驗證，87 項。跑在用完就丟的本機 Postgres
+  migrate-day-links.sql  trip_days 加 links（v2.7.0），每日備註也能放有標題的
+                        連結。F-43 改成「備註和連結都空才不留列」。可重複執行
+  rls-test.sql        權限驗證，89 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址
