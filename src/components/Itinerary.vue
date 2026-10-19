@@ -1,17 +1,17 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPencilSimple, PhWarning,
-  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy } from '@phosphor-icons/vue'
+  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate } from '@phosphor-icons/vue'
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
-  dayNote, setDayNote, addEntry, addEntries, updateEntry,
+  dayNote, dayLinks, dayRefs, setDayNote, addEntry, addEntries, updateEntry,
   toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
-  regionsOf, addRegion, user, me, tripMembers, item as findItem, newLink, linkLabel, sourceLabel, MAX_LINKS, thumbOf, imageOk, imageBroken, entryImages } from '../store'
-import { useLinkPreview } from '../link-preview'
+  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, linkify } from '../store'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
 import ImagePicker from './ImagePicker.vue'
 import ImageZoom from './ImageZoom.vue'
+import LinkFields from './LinkFields.vue'
 
 const props = defineProps({ tripId: String })
 
@@ -65,8 +65,45 @@ watch(date, scrollToDay)
 // ── 每日備註（F-43）
 const noteOpen = ref(false)
 const noteDraft = ref('')
-function openNote() { noteDraft.value = dayNote(props.tripId, date.value); noteOpen.value = true }
-function saveNote() { setDayNote(props.tripId, date.value, noteDraft.value); noteOpen.value = false }
+const linksDraft = ref([])
+const refsDraft = ref([])   // 引用的參考 item id
+function openNote() {
+  noteDraft.value = dayNote(props.tripId, date.value)
+  linksDraft.value = JSON.parse(JSON.stringify(dayLinks(props.tripId, date.value)))
+  refsDraft.value = dayRefs(props.tripId, date.value).map(i => i.id)
+  noteOpen.value = true
+}
+function saveNote() {
+  setDayNote(props.tripId, date.value, { note: noteDraft.value, links: linksDraft.value, refIds: refsDraft.value })
+  noteOpen.value = false
+}
+// 從參考加入：引用願望清單的參考（記那天要拍哪幾支 reels），不是複製連結 ——
+// 畫面讀參考當下的標題、照片、連結，參考改了這裡跟著變（跟 Q10 行程引用清單項目同一個概念）。
+// 參考被刪掉就查不到，自然不顯示。自己打的連結另外放在 linksDraft。
+const refPicking = ref(false)
+const refPicked = ref(new Set())
+const refQuery = ref('')
+const refItems = computed(() => store.items
+  .filter(i => i.tripId === props.tripId && i.type === 'reference')
+  .filter(i => !refQuery.value || i.title.toLowerCase().includes(refQuery.value.toLowerCase())))
+const refTags = i => i.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean)
+const draftRefs = computed(() => refsDraft.value.map(findItem).filter(Boolean))
+function openRefPick() {
+  refPicked.value = new Set(refsDraft.value); refQuery.value = ''
+  refPicking.value = true
+}
+function toggleRef(id) {
+  const s = new Set(refPicked.value)
+  s.has(id) ? s.delete(id) : s.add(id)
+  refPicked.value = s
+}
+// 原本選的維持原本的順序，新勾的接在後面
+function confirmRefPick() {
+  const keep = refsDraft.value.filter(id => refPicked.value.has(id))
+  refsDraft.value = [...keep, ...[...refPicked.value].filter(id => !keep.includes(id))]
+  refPicking.value = false
+}
+const addNoteDesc = d => (noteDraft.value = (noteDraft.value ? noteDraft.value + '\n' : '') + d)
 
 // ── 新增 / 編輯行程項目（F-38、F-39）
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
@@ -134,21 +171,13 @@ const canSaveForm = computed(() => !badTimes.value && !badStayRange.value
   && (!isStay.value || Boolean(form.value.endDate))
   && (editingRef.value || composedTitle.value.length > 0))
 // 連結在行程這一側是自己的一份，改了不會回寫清單。
-// 但讀標題的方式跟清單一樣（F-14，共用 useLinkPreview）：貼上就自動填連結標題，
+// 但讀標題的方式跟清單一樣（F-14，共用 LinkFields）：貼上就自動填連結標題，
 // 標題還空著的話連項目標題一起帶；自己打的地點還沒放圖時，預覽圖轉存成第一張。
-const { previews, load: loadPreview } = useLinkPreview()
-function addFormLink() { if (form.value.links.length < MAX_LINKS) form.value.links.push(newLink()) }
-async function onUrl(l) {
-  const d = await loadPreview(l)
-  if (d && !editingRef.value && !form.value.title.trim()) form.value.title = d.title
-  if (d?.image && hasImages.value) picker.value?.addFromPreview(d.image)
+function onPreview(d) {
+  if (!editingRef.value && !form.value.title.trim()) form.value.title = d.title
+  if (d.image && hasImages.value) picker.value?.addFromPreview(d.image)
 }
-// paste 事件當下 input 的值還是舊的，要等瀏覽器寫進去才讀得到
-const onPaste = l => setTimeout(() => onUrl(l))
-function addDesc(l) {
-  const d = previews.value[l.id]?.data?.description
-  if (d) form.value.note = (form.value.note ? form.value.note + '\n' : '') + d
-}
+const addDesc = d => (form.value.note = (form.value.note ? form.value.note + '\n' : '') + d)
 function togglePassenger(id) {
   const list = form.value.passengerIds
   const i = list.indexOf(id)
@@ -196,7 +225,16 @@ function openTransportAfter(slot, prev) {
 // ── 卡片選單：編輯 / 上下移 / 搬到其他天 / 刪除
 const entryMenu = ref(null)
 const menuImages = computed(() => (entryMenu.value ? entryImages(entryMenu.value) : []))
+// 燈箱一個就好：行程抽屜的照片、每日備註裡參考的照片都開這個，開的時候才決定看哪一組
 const zoom = ref()
+const zoomImages = ref([])
+const zoomAlt = ref('')
+async function openZoom(images, i, alt) {
+  zoomImages.value = images
+  zoomAlt.value = alt
+  await nextTick()
+  zoom.value.open(i)
+}
 // 到了現場要把店名貼進 Google Maps 搜尋，手機上長按選字很難選準，給一顆按鈕
 async function copyTitle() {
   try {
@@ -408,11 +446,41 @@ const addFor = ref(null)
       </section>
 
       <!-- 每日備註（F-43）：空的時候只有一行淡字 -->
-      <button class="mt-2 flex w-full items-start gap-2 rounded-[12px] border border-line bg-card p-2.5 text-left" @click="openNote">
+      <!-- 不是 <button>：備註裡的網址會變成連結，<a> 不能放在 <button> 裡。
+           點連結、點照片只做那件事（click.stop），點其他地方才打開編輯 -->
+      <div role="button" tabindex="0" class="mt-2 flex w-full cursor-pointer items-start gap-2 rounded-[12px] border border-line bg-card p-2.5 text-left"
+        @click="openNote" @keydown.enter.self="openNote" @keydown.space.self.prevent="openNote">
         <PhNote :size="16" class="mt-0.5 shrink-0 text-muted" />
-        <span v-if="dayNote(tripId, date)" class="min-w-0 flex-1 whitespace-pre-line text-[13px] leading-relaxed">{{ dayNote(tripId, date) }}</span>
+        <span v-if="dayNote(tripId, date) || dayLinks(tripId, date).length || dayRefs(tripId, date).length" class="grid min-w-0 flex-1 gap-2"
+          @click="e => e.target.closest('a, button') && e.stopPropagation()">
+          <span v-if="dayNote(tripId, date)" class="block whitespace-pre-line text-[13px] leading-relaxed wrap-anywhere" v-html="linkify(dayNote(tripId, date))" />
+          <!-- 要拍的參考：標題、照片一排（點了放大）、參考自己的連結 -->
+          <span v-for="r in dayRefs(tripId, date)" :key="r.id" class="block rounded-[10px] bg-surface-2 p-2">
+            <span class="flex items-center gap-1.5 text-[13px] font-semibold"><PhFilmSlate :size="14" class="shrink-0 text-tint" /><span class="truncate">{{ r.title }}</span></span>
+            <span v-if="r.images.length" class="mt-1.5 flex gap-1.5 overflow-x-auto">
+              <template v-for="(im, i) in r.images" :key="im.path">
+                <button v-if="imageOk(thumbOf(im))" class="shrink-0 cursor-zoom-in" :aria-label="`放大「${r.title}」第 ${i + 1} 張照片`" @click="openZoom(r.images, i, r.title)">
+                  <img :src="thumbOf(im)" alt="" class="size-16 rounded-md bg-line object-cover" @error="imageBroken(thumbOf(im))" />
+                </button>
+              </template>
+            </span>
+            <span v-if="r.links.length" class="mt-1.5 flex flex-wrap gap-1.5">
+              <a v-for="l in r.links" :key="l.id" :href="l.url" target="_blank" rel="noopener"
+                class="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-line bg-card px-2.5 text-[12px] font-medium">
+                <PhArrowSquareOut :size="13" class="shrink-0 text-accent" /><span class="truncate">{{ linkLabel(l) }}</span>
+              </a>
+            </span>
+          </span>
+          <!-- 自己打的連結攤成一排可以點的小按鈕；真的 <a>，手機上 Maps 連結會跳 App -->
+          <span v-if="dayLinks(tripId, date).length" class="flex flex-wrap gap-1.5">
+            <a v-for="l in dayLinks(tripId, date)" :key="l.id" :href="l.url" target="_blank" rel="noopener"
+              class="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2.5 text-[12px] font-medium">
+              <PhArrowSquareOut :size="13" class="shrink-0 text-accent" /><span class="truncate">{{ linkLabel(l) }}</span>
+            </a>
+          </span>
+        </span>
         <span v-else class="flex-1 text-[13px] text-muted">＋ 這天的備註</span>
-      </button>
+      </div>
 
       <!-- 上半：行程區 -->
       <section class="mt-5">
@@ -589,28 +657,7 @@ const addFor = ref(null)
         </div>
 
         <!-- 從清單帶過來的連結也在這裡改，改了不會回寫清單 -->
-        <div>
-          <span class="label">連結（選填，最多 {{ MAX_LINKS }} 個）</span>
-          <div v-if="form.links.length" class="grid gap-2">
-            <div v-for="(l, i) in form.links" :key="l.id" class="overflow-hidden rounded-xl border border-line bg-card p-2.5">
-              <div class="flex items-center gap-2">
-                <input v-model="l.title" class="input h-9 min-w-0 flex-1" maxlength="40" placeholder="連結標題（選填）" />
-                <button class="icon-btn size-8 shrink-0 text-muted" aria-label="移除這個連結" @click="form.links.splice(i, 1)"><PhX :size="16" /></button>
-              </div>
-              <input v-model="l.url" type="url" inputmode="url" class="input mt-2 h-9" placeholder="貼上 Google Maps、IG 或網頁連結"
-                @blur="onUrl(l)" @paste="onPaste(l)" />
-              <p v-if="previews[l.id]?.state === 'loading'" class="mt-1.5 px-1 text-[12px] text-muted">正在取得預覽…</p>
-              <p v-else-if="previews[l.id]?.state === 'fail'" class="mt-1.5 px-1 text-[12px] text-danger">無法取得預覽，可以手動填標題</p>
-              <div v-else-if="l.url.trim()" class="mt-1.5 flex items-baseline gap-2 px-1">
-                <span class="shrink-0 text-[12px] text-muted">{{ sourceLabel(l.url) }}</span>
-                <button v-if="previews[l.id]?.data?.description" class="truncate text-[12px] font-medium text-accent" @click="addDesc(l)">加入備註</button>
-              </div>
-            </div>
-          </div>
-          <button v-if="form.links.length < MAX_LINKS" class="btn-ghost mt-2 h-9 w-full text-[14px]" @click="addFormLink">
-            <PhPlus :size="16" weight="bold" />新增連結
-          </button>
-        </div>
+        <LinkFields :links="form.links" @preview="onPreview" @desc="addDesc" />
       </div>
       <template #footer>
         <button class="btn-primary h-12 w-full" :disabled="!canSaveForm" @click="submitForm">儲存</button>
@@ -627,13 +674,13 @@ const addFor = ref(null)
       <!-- 卡片上只有一張小縮圖，抽屜裡整排攤開，點了放大看。引用清單的照片也在這裡 -->
       <div v-if="menuImages.length" class="mb-2 flex gap-2 overflow-x-auto px-3">
         <template v-for="(im, i) in menuImages" :key="im.path">
-          <button v-if="imageOk(thumbOf(im))" class="shrink-0 cursor-zoom-in" :aria-label="`放大第 ${i + 1} 張照片`" @click="zoom.open(i)">
+          <button v-if="imageOk(thumbOf(im))" class="shrink-0 cursor-zoom-in" :aria-label="`放大第 ${i + 1} 張照片`" @click="openZoom(menuImages, i, entryTitle(entryMenu))">
             <img :src="thumbOf(im)" alt="" class="size-20 rounded-lg bg-line object-cover" @error="imageBroken(thumbOf(im))" />
           </button>
         </template>
       </div>
       <!-- 卡片上的備註是截斷的，抽屜裡給完整內容 -->
-      <p v-if="entryMenu?.note" class="mb-1 max-h-48 overflow-auto whitespace-pre-line border-b border-line px-3 pb-3 text-[14px] leading-relaxed text-muted">{{ entryMenu.note }}</p>
+      <p v-if="entryMenu?.note" class="mb-1 max-h-48 overflow-auto whitespace-pre-line border-b border-line px-3 pb-3 text-[14px] leading-relaxed text-muted"><span v-html="linkify(entryMenu.note)" /></p>
       <!-- 真的 <a>：手機上 Google Maps 連結要能跳到地圖 App（F-15） -->
       <div v-if="entryMenu?.links?.length" class="mb-1 border-b border-line pb-1">
         <a v-for="l in entryMenu.links" :key="l.id" :href="l.url" target="_blank" rel="noopener" class="row" @click="entryMenu = null">
@@ -673,7 +720,7 @@ const addFor = ref(null)
       <p v-if="store.offline" class="px-3 pb-1 pt-2 text-[13px] text-muted">離線中，只能勾選完成</p>
     </Sheet>
 
-    <ImageZoom ref="zoom" :images="menuImages" :alt="entryMenu ? entryTitle(entryMenu) : ''" />
+    <ImageZoom ref="zoom" :images="zoomImages" :alt="zoomAlt" />
 
     <!-- 搬到其他天／時段（取代跨日拖曳） -->
     <Sheet :open="!!moveFor" title="搬到" @update:open="v => !v && (moveFor = null)">
@@ -774,10 +821,57 @@ const addFor = ref(null)
       </template>
     </Sheet>
 
+    <!-- 從參考加入當天的連結。疊在每日備註的抽屜上面，選完回到備註繼續編輯 -->
+    <Sheet v-model:open="refPicking" title="從參考加入">
+      <div class="px-2 pb-2">
+        <input v-model="refQuery" class="input" placeholder="搜尋參考" />
+        <p v-if="!refItems.length" class="py-6 text-center text-[13px] text-muted">{{ refQuery ? '沒有符合的參考' : '願望清單的「參考」裡還沒有東西' }}</p>
+        <ul v-else class="mt-3 grid gap-1.5">
+          <li v-for="i in refItems" :key="i.id">
+            <button class="flex w-full items-center gap-2.5 rounded-[10px] border border-line bg-card p-2 text-left" @click="toggleRef(i.id)">
+              <span :class="['flex size-5 shrink-0 items-center justify-center rounded-md border',
+                refPicked.has(i.id) ? 'border-transparent bg-accent text-accent-fg' : 'border-line']">
+                <PhPlus v-if="!refPicked.has(i.id)" :size="12" weight="bold" class="opacity-40" />
+                <span v-else class="text-[12px] font-bold">✓</span>
+              </span>
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-[14px] font-medium">{{ i.title }}</span>
+                <span class="mt-0.5 flex flex-wrap items-center gap-1 text-[11px] text-muted">
+                  {{ user(i.ownerUserId)?.name }}<template v-if="i.images.length">・{{ i.images.length }} 張圖</template>
+                  <span v-for="n in refTags(i)" :key="n" :class="['rounded-full px-1.5', tagColor(n)]">{{ n }}</span>
+                </span>
+              </span>
+            </button>
+          </li>
+        </ul>
+      </div>
+      <template #footer>
+        <button class="btn-primary h-12 w-full" @click="confirmRefPick">
+          {{ refPicked.size ? `選好了（${refPicked.size} 個）` : '完成' }}
+        </button>
+      </template>
+    </Sheet>
+
     <!-- 每日備註編輯 -->
     <Sheet v-model:open="noteOpen" title="這天的備註">
-      <div class="px-2 pb-2">
-        <textarea v-model="noteDraft" class="input h-32 resize-y py-2.5" maxlength="500" placeholder="住哪間飯店、天氣、下雨備案…" />
+      <div class="grid gap-3 px-2 pb-2">
+        <textarea v-model="noteDraft" class="input h-32 resize-y py-2.5" maxlength="500" placeholder="住哪間飯店、天氣、下雨備案…" aria-label="備註" />
+        <!-- 這天要拍的參考（引用願望清單的參考，照片與連結跟著參考走） -->
+        <div>
+          <span class="label">要拍的參考</span>
+          <ul v-if="draftRefs.length" class="mb-2 grid gap-1.5">
+            <li v-for="i in draftRefs" :key="i.id" class="flex items-center gap-2.5 rounded-[10px] border border-line bg-card p-2">
+              <img v-if="imageOk(thumbOf(i.images[0]))" :src="thumbOf(i.images[0])" alt="" class="size-10 shrink-0 rounded-md bg-line object-cover" />
+              <span v-else class="flex size-10 shrink-0 items-center justify-center rounded-md bg-tint-soft text-tint"><PhFilmSlate :size="18" /></span>
+              <span class="min-w-0 flex-1 truncate text-[14px] font-medium">{{ i.title }}</span>
+              <button class="icon-btn size-8 shrink-0 text-muted" :aria-label="`拿掉「${i.title}」`" @click="refsDraft.splice(refsDraft.indexOf(i.id), 1)"><PhX :size="16" /></button>
+            </li>
+          </ul>
+          <button class="btn-ghost h-9 w-full text-[14px]" @click="openRefPick">
+            <PhFilmSlate :size="16" weight="bold" />從參考加入
+          </button>
+        </div>
+        <LinkFields :links="linksDraft" @desc="addNoteDesc" />
       </div>
       <template #footer>
         <button class="btn-primary h-12 w-full" @click="saveNote">儲存</button>

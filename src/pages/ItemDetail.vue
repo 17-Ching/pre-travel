@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhPencilSimple, PhTrash, PhCopy, PhArrowSquareOut, PhCheck, PhMapPin, PhShoppingBag, PhGift } from '@phosphor-icons/vue'
-import { store, isBuy, item as getItem, user, setStatus, deleteItem, copyItem, toast, fmtDateTime, linkLabel, sourceLabel, imageOk, imageBroken, ART } from '../store'
+import { store, isBuy, linkify, item as getItem, user, setStatus, deleteItem, copyItem, toast, fmtDateTime, linkLabel, sourceLabel, imageOk, imageBroken, ART } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
 import TagChip from '../components/TagChip.vue'
@@ -67,9 +67,6 @@ function openZoom(i) {
   zoom.value.open(i)
 }
 
-// F-30: plain text with URLs turned into links. Escape first, then linkify.
-const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-const linkify = s => esc(s).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener" class="break-all text-accent underline">${u}</a>`)
 
 function remove() {
   if (confirm(`刪除「${it.value.title}」？`)) { deleteItem(it.value.id); router.replace(`/trips/${tripId}`) }

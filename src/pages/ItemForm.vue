@@ -1,11 +1,10 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { PhX, PhPlus } from '@phosphor-icons/vue'
 import { store, isBuy, item as getItem, regionsOf, myTags, tagScope, ensureTag, addRegion, saveItem, tagColor,
-  MAX_LINKS, newLink, sourceLabel } from '../store'
-import { useLinkPreview } from '../link-preview'
+  MAX_LINKS, newLink } from '../store'
 import TopBar from '../components/TopBar.vue'
+import LinkFields from '../components/LinkFields.vue'
 import ImagePicker from '../components/ImagePicker.vue'
 
 const route = useRoute(), router = useRouter()
@@ -22,7 +21,7 @@ const KIND = {
     tag: '輸入分類，例：轉場影片、拍食物' },
 }
 const type = existing?.type ?? (KIND[route.query.type] ? route.query.type : 'place')
-// 參考可以自己放圖（拍照姿勢、構圖），但不自動抓連結預覽圖，見 onUrl
+// 參考可以自己放圖（拍照姿勢、構圖），但不自動抓連結預覽圖，見 onPreview
 const isRef = type === 'reference'
 const qRegion = route.query.region
 const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
@@ -47,14 +46,9 @@ function onRegion(e) {
   e.target.value = f.value.regionId ?? ''
 }
 
-// F-14 連結預覽。抓取與狀態在 useLinkPreview（行程那邊共用同一支），
+// F-14 連結預覽。抓取與連結標題在 LinkFields，
 // 這裡只做清單專屬的後續：補項目標題、把預覽圖轉存進圖片列。
-const { previews, load } = useLinkPreview()
-function addLink() { if (f.value.links.length < MAX_LINKS) f.value.links.push(newLink()) }
-function removeLink(i) { f.value.links.splice(i, 1) }
-async function onUrl(l) {
-  const d = await load(l)
-  if (!d) return
+function onPreview(d) {
   // 送禮的標題是人名，不拿商品頁的標題去填
   if (!f.value.title.trim() && type !== 'gift') f.value.title = d.title
   // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）。
@@ -62,12 +56,7 @@ async function onUrl(l) {
   if (d.image && !isRef) picker.value?.addFromPreview(d.image)
 }
 const picker = ref()
-// paste 事件當下 input 的值還是舊的，要等瀏覽器寫進去才讀得到
-const onPaste = l => setTimeout(() => onUrl(l))
-function addDesc(l) {
-  const d = previews.value[l.id]?.data?.description
-  if (d) f.value.note = (f.value.note ? f.value.note + '\n' : '') + d
-}
+const addDesc = d => (f.value.note = (f.value.note ? f.value.note + '\n' : '') + d)
 
 // F-27 圖片的上傳、貼網址、沒存到的檔案清理都在 ImagePicker 裡
 
@@ -88,29 +77,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
       <input id="title" v-model="f.title" class="input" maxlength="100" :placeholder="KIND[type].title" />
     </div>
 
-    <div>
-      <span class="label">連結（最多 {{ MAX_LINKS }} 個）</span>
-      <div class="grid gap-2">
-        <div v-for="(l, i) in f.links" :key="l.id" class="overflow-hidden rounded-xl border border-line bg-card p-2.5">
-          <div class="flex items-center gap-2">
-            <input v-model="l.title" class="input h-9 min-w-0 flex-1" maxlength="40" placeholder="連結標題（選填）" />
-            <button class="icon-btn size-8 shrink-0 text-muted" aria-label="移除這個連結" @click="removeLink(i)"><PhX :size="16" /></button>
-          </div>
-          <input v-model="l.url" type="url" inputmode="url" class="input mt-2 h-9" :placeholder="KIND[type].link"
-            @blur="onUrl(l)" @paste="onPaste(l)" />
-          <p v-if="previews[l.id]?.state === 'loading'" class="mt-1.5 px-1 text-[12px] text-muted">正在取得預覽…</p>
-          <p v-else-if="previews[l.id]?.state === 'fail'" class="mt-1.5 px-1 text-[12px] text-danger">無法取得預覽，可以手動填標題</p>
-          <div v-else-if="l.url.trim()" class="mt-1.5 flex items-baseline gap-2 px-1">
-            <span class="shrink-0 text-[12px] text-muted">{{ sourceLabel(l.url) }}</span>
-            <button v-if="previews[l.id]?.data?.description" class="truncate text-[12px] font-medium text-accent" @click="addDesc(l)">加入備註</button>
-          </div>
-        </div>
-      </div>
-      <button v-if="f.links.length < MAX_LINKS" class="btn-ghost mt-2 h-9 w-full text-[14px]" @click="addLink">
-        <PhPlus :size="16" weight="bold" />新增連結
-      </button>
-
-    </div>
+    <LinkFields :links="f.links" :label="`連結（最多 ${MAX_LINKS} 個）`" :placeholder="KIND[type].link" @preview="onPreview" @desc="addDesc" />
 
     <ImagePicker ref="picker" :images="f.images" :trip-id="tripId" :label="isRef ? '參考圖（姿勢、構圖，最多 5 張）' : '圖片（最多 5 張）'" />
 

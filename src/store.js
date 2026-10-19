@@ -63,6 +63,10 @@ export const MAX_LINKS = 5
 export const newLink = () => ({ id: uid(), url: '', title: '' })
 export const linkLabel = l => l.title?.trim() || sourceLabel(l.url) || l.url
 export const firstUrl = item => item.links?.[0]?.url || ''
+// F-30：備註是純文字，裡面的網址變成可以點的連結。先跳脫再轉，給 v-html 用。
+// 清單詳情與行程（每日備註、行程項目的備註）共用。
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+export const linkify = s => esc(s).replace(/https?:\/\/[^\s<]+/g, u => `<a href="${u}" target="_blank" rel="noopener" class="break-all text-accent underline">${u}</a>`)
 
 // ---- 深淺色：兩態，跟登入無關，所以留在 localStorage
 export const THEMES = [['light', '淺色'], ['dark', '深色']]
@@ -698,7 +702,7 @@ export function tripDays(tripId) {
   const inRange = new Set(days.map(d => d.date))
   const stray = [...new Set([
     ...store.entries.filter(e => e.tripId === tripId).map(e => e.date),
-    ...store.days.filter(d => d.tripId === tripId && d.note.trim()).map(d => d.date),
+    ...store.days.filter(d => d.tripId === tripId && (d.note.trim() || d.links?.length || d.refIds?.length)).map(d => d.date),
   ])].filter(d => !inRange.has(d)).sort()
   for (const iso of stray) {
     days.push({ date: iso, dayNo: null, weekday: WEEK[parseDate(iso).getDay()], isToday: iso === today, outOfRange: true })
@@ -746,6 +750,11 @@ export function daySummary(tripId, date) {
 
 export const dayNote = (tripId, date) =>
   store.days.find(d => d.tripId === tripId && d.date === date)?.note ?? ''
+export const dayLinks = (tripId, date) =>
+  store.days.find(d => d.tripId === tripId && d.date === date)?.links ?? []
+// 引用的參考：讀參考當下的樣子，被刪掉的查不到就略過
+export const dayRefs = (tripId, date) =>
+  (store.days.find(d => d.tripId === tripId && d.date === date)?.refIds ?? []).map(item).filter(Boolean)
 
 // 引用的是活的資料（Q10）：被引用項目改標題或換照片，行程跟著變。
 // F-47 斷開引用後 title 變成快照，這兩支負責把判斷收在一個地方。
@@ -887,25 +896,28 @@ export function deleteEntry(id) {
 }
 
 // F-43：空備註不留資料列，清空等於刪掉那一筆
-export function setDayNote(tripId, date, note) {
+// v2.7.0 起每日備註也能放連結、引用參考：三個都空才不留資料列
+export function setDayNote(tripId, date, { note, links, refIds }) {
   note = (note ?? '').slice(0, 500)
+  links = (links ?? []).filter(l => l.url?.trim())
+  refIds = [...(refIds ?? [])]
   const existing = store.days.find(d => d.tripId === tripId && d.date === date)
   const before = existing ? { ...existing } : null
 
-  if (!note.trim()) {
+  if (!note.trim() && !links.length && !refIds.length) {
     if (!existing) return
     store.days.splice(store.days.indexOf(existing), 1)
     push(() => api.deleteDayNote(tripId, date), () => store.days.push(reactive(before)))
     return
   }
   if (existing) {
-    Object.assign(existing, { note, updatedBy: store.me, updatedAt: now() })
-    push(() => api.saveDayNote(tripId, date, note, store.me), () => Object.assign(existing, before))
+    Object.assign(existing, { note, links, refIds, updatedBy: store.me, updatedAt: now() })
+    push(() => api.saveDayNote(tripId, date, note, links, refIds, store.me), () => Object.assign(existing, before))
     return
   }
-  const created = reactive({ tripId, date, note, updatedBy: store.me, updatedAt: now() })
+  const created = reactive({ tripId, date, note, links, refIds, updatedBy: store.me, updatedAt: now() })
   store.days.push(created)
-  push(() => api.saveDayNote(tripId, date, note, store.me), () => {
+  push(() => api.saveDayNote(tripId, date, note, links, refIds, store.me), () => {
     const i = store.days.indexOf(created)
     if (i >= 0) store.days.splice(i, 1)
   })

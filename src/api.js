@@ -97,7 +97,7 @@ const expenseRow = e => ({
   source_expense_id: e.sourceExpenseId ?? null,
 })
 
-const toDay = r => ({ tripId: r.trip_id, date: r.date, note: r.note ?? '', updatedBy: r.updated_by, updatedAt: r.updated_at })
+const toDay = r => ({ tripId: r.trip_id, date: r.date, note: r.note ?? '', links: r.links ?? [], refIds: r.ref_ids ?? [], updatedBy: r.updated_by, updatedAt: r.updated_at })
 
 // 寫回資料庫時只留欄位本身，畫面加上去的東西（簽名網址）要剝掉
 const itemRow = i => ({
@@ -361,10 +361,10 @@ export async function deleteEntry(id) {
   must(await sb().from('itinerary_entries').delete().eq('id', id).select(), '刪除行程項目')
 }
 
-// 每日備註沒有備註就不該有資料列，所以用 upsert 而不是先查再決定
-export async function saveDayNote(tripId, date, note, userId) {
+// 每日備註、連結、引用的參考都空就不該有資料列，所以用 upsert 而不是先查再決定
+export async function saveDayNote(tripId, date, note, links, refIds, userId) {
   const { data, error } = await sb().from('trip_days')
-    .upsert({ trip_id: tripId, date, note: (note ?? '').slice(0, 500), updated_by: userId, updated_at: new Date().toISOString() },
+    .upsert({ trip_id: tripId, date, note: (note ?? '').slice(0, 500), links: (links ?? []).filter(l => l.url?.trim()), ref_ids: refIds ?? [], updated_by: userId, updated_at: new Date().toISOString() },
             { onConflict: 'trip_id,date' })
     .select().single()
   if (error) throw new Error('儲存當天備註失敗：' + error.message)
