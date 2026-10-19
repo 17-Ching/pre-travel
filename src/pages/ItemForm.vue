@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhX, PhPlus } from '@phosphor-icons/vue'
-import { store, item as getItem, regionsOf, myTags, tagScope, ensureTag, addRegion, saveItem, tagColor,
+import { store, isBuy, item as getItem, regionsOf, myTags, tagScope, ensureTag, addRegion, saveItem, tagColor,
   MAX_LINKS, newLink, sourceLabel } from '../store'
 import { useLinkPreview } from '../link-preview'
 import TopBar from '../components/TopBar.vue'
@@ -15,6 +15,9 @@ const existing = route.params.itemId ? getItem(route.params.itemId) : null
 const KIND = {
   place: { label: '地點', title: '店名或景點名稱', link: '貼上 Google Maps、IG 或網頁連結', note: '營業時間、要點什麼、注意事項…' },
   shopping: { label: '購物', title: '想買的東西', link: '貼上 Google Maps、IG 或網頁連結', note: '營業時間、要點什麼、注意事項…' },
+  // 送禮清單：標題就是「送給誰」，送什麼還沒想好可以先空著寫在備註
+  gift: { label: '送禮對象', titleLabel: '送給誰', title: '例：媽媽、辦公室同事', link: '貼上商品頁、IG 或 Google Maps 連結',
+    note: '想送什麼、對方的喜好…還沒想好可以先空著' },
   reference: { label: '參考', title: '影片或貼文（例：京都 3 天 2 夜 vlog）', link: '貼上 YouTube、IG、Threads 連結', note: '想參考的段落、時間點、拍攝角度…',
     tag: '輸入分類，例：轉場影片、拍食物' },
 }
@@ -52,7 +55,8 @@ function removeLink(i) { f.value.links.splice(i, 1) }
 async function onUrl(l) {
   const d = await load(l)
   if (!d) return
-  if (!f.value.title.trim()) f.value.title = d.title
+  // 送禮的標題是人名，不拿商品頁的標題去填
+  if (!f.value.title.trim() && type !== 'gift') f.value.title = d.title
   // 預覽圖轉存成自己的副本再放進圖片列，來源網址過期也不會變破圖（F-14）。
   // 參考不自動轉存：參考的圖是使用者自己挑的姿勢、構圖，影片封面塞進來只會佔掉一格
   if (d.image && !isRef) picker.value?.addFromPreview(d.image)
@@ -80,7 +84,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
   <TopBar :title="(existing ? '編輯' : '新增') + KIND[type].label" back />
   <main class="grid gap-5 px-4 pb-32 pt-2">
     <div>
-      <label class="label" for="title">標題</label>
+      <label class="label" for="title">{{ KIND[type].titleLabel ?? '標題' }}</label>
       <input id="title" v-model="f.title" class="input" maxlength="100" :placeholder="KIND[type].title" />
     </div>
 
@@ -110,7 +114,8 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
 
     <ImagePicker ref="picker" :images="f.images" :trip-id="tripId" :label="isRef ? '參考圖（姿勢、構圖，最多 5 張）' : '圖片（最多 5 張）'" />
 
-    <div>
+    <!-- 送禮不分地區與標籤：要整理的是「送誰」，那就是標題本身 -->
+    <div v-if="type !== 'gift'">
       <label class="label" for="region">地區</label>
       <select id="region" class="input" :value="f.regionId ?? ''" @change="onRegion">
         <option value="">未分類</option>
@@ -119,7 +124,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
       </select>
     </div>
 
-    <div>
+    <div v-if="type !== 'gift'">
       <label class="label" for="tag">標籤</label>
       <div v-if="tags.length" class="mb-2 flex flex-wrap gap-1.5">
         <button v-for="g in tags" :key="g.id" @click="toggleTag(g.id)"
@@ -129,7 +134,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
       <button v-if="tagInput.trim() && !tagExists" class="mt-2 text-[13px] font-medium text-accent" @click="addTag">建立「{{ tagInput.trim() }}」</button>
     </div>
 
-    <template v-if="type === 'shopping'">
+    <template v-if="isBuy(type)">
       <div>
         <label class="label" for="store">預計購買地點</label>
         <input id="store" v-model="f.plannedStore" class="input" maxlength="100" placeholder="例：唐吉訶德 道頓堀店" />

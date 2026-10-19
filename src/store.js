@@ -124,12 +124,13 @@ export async function promptInstall() {
   await e.prompt()
 }
 
-// ---- 願望清單分組的展開狀態
-// 預設收起來（使用者要的），所以記的是「展開了哪些」—— 新冒出來的組自然是收著的。
-// 刻意不存 localStorage：重開 app 一律從收合開始；但留在記憶體裡，點進項目詳情再
-// 返回時，剛剛打開的那幾組還開著，不用重找（scrollBehavior 還原的捲動位置也才有意義）。
+// ---- 願望清單分組的收合狀態
+// 預設全部打開（v2.5.1 使用者要的：一點進去就看到全部），所以記的是「收起了哪些」——
+// 新冒出來的組自然是開著的。
+// 刻意不存 localStorage：重開 app 一律從全開開始；但留在記憶體裡，點進項目詳情再
+// 返回時，剛剛收起的那幾組還收著（scrollBehavior 還原的捲動位置也才有意義）。
 // key 是 行程:子清單:組，組是地區 id 或標籤名，改名或刪掉只會留下用不到的舊 key，無害。
-export const openGroups = reactive(new Set())
+export const closedGroups = reactive(new Set())
 
 // ---- toast
 let toastTimer
@@ -175,6 +176,8 @@ export const regionItemCount = r => store.items.filter(i => i.regionId === r.id)
 // 參考的分類是「轉場影片」「拍食物」這種，跟景點的「拉麵」「必去」不是同一回事，
 // 混在一起兩邊的選單都會塞滿用不到的選項。同名標籤在兩池各自獨立。
 export const tagScope = type => (type === 'reference' ? 'reference' : 'default')
+// 有「已買 / 未買 / 沒買到」的子清單。送禮清單跟購物同一套欄位與狀態，只是只有本人看得到（RLS 擋）
+export const isBuy = type => type === 'shopping' || type === 'gift'
 export const myTags = (tripId, scope = 'default') =>
   store.tags.filter(g => g.tripId === tripId && g.userId === store.me && g.scope === scope)
 export const tagUsage = g => store.items.filter(i => i.tagIds.includes(g.id)).length

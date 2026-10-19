@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
   PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight, PhWallet } from '@phosphor-icons/vue'
 import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatus, copyItem, deleteItem, toast, now, fmtTime, tagColor, sourceLabel, linkLabel,
-  tripDays, addEntry, entryFromItem, scheduledSlots, tagScope, openGroups } from '../store'
+  tripDays, addEntry, entryFromItem, scheduledSlots, tagScope, closedGroups, isBuy } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
 import LoadState from '../components/LoadState.vue'
@@ -50,10 +50,14 @@ const scoped = computed(() => store.items.filter(i => i.tripId === tripId && i.o
 // （原本掛在 F-25 底下，那條隨共同分頁在 v2.0 刪掉了，但比對名稱這件事留著才對。）
 const tagNames = computed(() => [...new Set(scoped.value.flatMap(i => i.tagIds.map(id => store.tags.find(g => g.id === id)?.name)).filter(Boolean))])
 
-const STATUS = { shopping: [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買到']], place: [['unvisited', '未去'], ['visited', '已去過']] }
+const BUY = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買到']]
+const STATUS = { shopping: BUY, gift: BUY, place: [['unvisited', '未去'], ['visited', '已去過']] }
 // 參考（影片、貼文）沒有完成狀態：看過了不代表就沒用了。所以它沒有狀態篩選、
 // 沒有進度條、segment 上只顯示數量。下面凡是查 STATUS[p.type] 的地方都要擋這個情況。
-const TYPES = [['place', '地點'], ['shopping', '購物'], ['reference', '參考']]
+const TYPES = [['place', '地點'], ['shopping', '購物'], ['gift', '送禮清單'], ['reference', '參考']]
+// 送禮清單只有本人看得到（RLS 擋，別人的根本不會載進來），看別人的清單時這個頁籤不出現
+const types = computed(() => (editable.value ? TYPES : TYPES.filter(([k]) => k !== 'gift')))
+watch(editable, v => { if (!v && p.type === 'gift') p.type = 'place' }, { immediate: true })
 const hasStatus = computed(() => Boolean(STATUS[p.type]))
 const ORDER = { todo: 0, not_found: 1, bought: 2 }
 // 地區與標籤都是複選：同一組之內是「或」（選了東京和大阪＝兩邊都看得到），
@@ -64,10 +68,10 @@ const tagNameOf = id => store.tags.find(g => g.id === id)?.name
 
 const filtered = computed(() => scoped.value.filter(i =>
   (!p.regions.length || p.regions.includes(i.regionId ?? 'none')) &&
-  (!p.status || (p.type === 'shopping' ? i.status === p.status : (p.status === 'visited') === i.visited)) &&
+  (!p.status || (isBuy(p.type) ? i.status === p.status : (p.status === 'visited') === i.visited)) &&
   (!p.tags.length || i.tagIds.some(id => p.tags.includes(tagNameOf(id)))) &&
   (!p.q || [i.title, i.note, i.plannedStore].join(' ').toLowerCase().includes(p.q.toLowerCase())),
-).sort((a, b) => (p.type === 'shopping' ? ORDER[a.status] - ORDER[b.status] : a.visited - b.visited) || b.createdAt.localeCompare(a.createdAt)))
+).sort((a, b) => (isBuy(p.type) ? ORDER[a.status] - ORDER[b.status] : a.visited - b.visited) || b.createdAt.localeCompare(a.createdAt)))
 
 // 地點與購物照地區分組。以前只篩一個地區時會改成無標題的平鋪，但複選兩個地區時平鋪
 // 就看不出哪筆屬於哪一區了；空的組本來就會被濾掉，所以只選一個時結果一樣乾淨。
@@ -78,6 +82,8 @@ const filtered = computed(() => scoped.value.filter(i =>
 // 還會冒出一組「拍食物」（因為那筆兩個都有）。組名排序固定，新增項目時組不會跳來跳去。
 const groups = computed(() => {
   const keep = g => g.items.length
+  // 送禮清單不分組：沒有地區與標籤，標題本身（送誰）就是整理的依據
+  if (p.type === 'gift') return [{ key: 'all', name: '', items: filtered.value }].filter(keep)
   if (p.type !== 'reference') {
     return [...regions.value.map(r => ({ key: r.id, name: r.name, items: filtered.value.filter(i => i.regionId === r.id) })),
       { key: 'none', name: '未分類', items: filtered.value.filter(i => !i.regionId) }].filter(keep)
@@ -87,17 +93,17 @@ const groups = computed(() => {
   return [...names.map(n => ({ key: 'tag-' + n, name: n, items: filtered.value.filter(i => i.tagIds.some(id => tagNameOf(id) === n)) })),
     { key: 'untagged', name: '沒有標籤', items: filtered.value.filter(i => !i.tagIds.some(tagNameOf)) }].filter(keep)
 })
-const done = computed(() => scoped.value.filter(i => (p.type === 'shopping' ? i.status === 'bought' : i.visited)).length)
+const done = computed(() => scoped.value.filter(i => (isBuy(p.type) ? i.status === 'bought' : i.visited)).length)
 const hasFilter = computed(() => p.regions.length || p.status || p.tags.length || p.q)
 
-// 分組可以收合，預設收著。兩種情況強制全部攤開、也不給收：
+// 分組可以收合，預設打開。兩種情況強制全部攤開、也不給收：
 //  - 正在篩選或搜尋：收著的組會把命中的項目藏起來，畫面上只剩一個寫著數字的標題，
-//    篩選等於白做。清掉篩選後回到原本收合的樣子，不動使用者的展開狀態。
+//    篩選等於白做。清掉篩選後回到原本的樣子，不動使用者收起的那幾組。
 //  - 只有一組：沒有東西需要整理，收起來只是多點一下。
 const groupKey = g => `${tripId}:${p.type}:${g.key}`
 const forceOpen = computed(() => Boolean(hasFilter.value) || groups.value.length === 1)
-const isOpen = g => forceOpen.value || openGroups.has(groupKey(g))
-const toggleGroup = g => { const k = groupKey(g); openGroups.has(k) ? openGroups.delete(k) : openGroups.add(k) }
+const isOpen = g => forceOpen.value || !closedGroups.has(groupKey(g))
+const toggleGroup = g => { const k = groupKey(g); closedGroups.has(k) ? closedGroups.delete(k) : closedGroups.add(k) }
 
 const showSearch = ref(!!p.q), menu = ref(false), statusFor = ref(null), itemMenu = ref(null), filterOpen = ref(false)
 
@@ -202,7 +208,7 @@ function remove() {
 // F-21 / F-36：兩個子清單的完成數都直接標在 segment 上，不另外佔一行
 const tally = type => {
   const list = store.items.filter(i => i.tripId === tripId && i.ownerUserId === tabOwner.value && i.type === type)
-  return { done: list.filter(i => (type === 'shopping' ? i.status === 'bought' : i.visited)).length, total: list.length }
+  return { done: list.filter(i => (isBuy(type) ? i.status === 'bought' : i.visited)).length, total: list.length }
 }
 const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b-2 text-[14px] whitespace-nowrap transition-colors duration-150',
   p.tab === id ? 'border-accent font-semibold text-ink' : 'border-transparent text-muted']
@@ -264,11 +270,12 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 
       <!-- 行程分頁有自己的日期列與版面，下面這整塊是願望清單專用 -->
       <div v-if="onList" class="gutter pb-2 pt-2">
-        <!-- 滑塊寬度＝(容器扣掉左右 padding) / 3，位移是自己寬度的整數倍 -->
-        <div class="relative grid grid-cols-3 rounded-[12px] bg-surface-2 p-1">
-          <div class="absolute inset-y-1 left-1 w-[calc((100%-0.5rem)/3)] rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
-            :style="{ transform: `translateX(${TYPES.findIndex(([k]) => k === p.type) * 100}%)` }" aria-hidden="true" />
-          <button v-for="[k, l] in TYPES" :key="k"
+        <!-- 滑塊寬度＝(容器扣掉左右 padding) / 頁籤數，位移是自己寬度的整數倍。
+             頁籤數會變（看別人的清單時沒有送禮清單），所以欄數與寬度都用算的 -->
+        <div class="relative grid rounded-[12px] bg-surface-2 p-1" :style="{ gridTemplateColumns: `repeat(${types.length}, minmax(0, 1fr))` }">
+          <div class="absolute inset-y-1 left-1 rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
+            :style="{ width: `calc((100% - 0.5rem) / ${types.length})`, transform: `translateX(${types.findIndex(([k]) => k === p.type) * 100}%)` }" aria-hidden="true" />
+          <button v-for="[k, l] in types" :key="k"
             :class="['relative z-10 flex h-8 items-center justify-center gap-1.5 rounded-[9px] text-[14px] font-semibold transition-colors duration-150', p.type === k ? 'text-ink' : 'text-muted']"
             @click="setType(k)">
             {{ l }}
@@ -281,7 +288,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       <div v-if="onList" class="h-px w-full bg-line">
         <div v-if="scoped.length && hasStatus" class="h-px bg-accent transition-[width] duration-200 ease-out"
           :style="{ width: (done / scoped.length) * 100 + '%' }" role="progressbar" :aria-valuenow="done" :aria-valuemax="scoped.length"
-          :aria-label="`${p.type === 'shopping' ? '已買' : '已去'} ${done} / ${scoped.length}`" />
+          :aria-label="`${isBuy(p.type) ? '已買' : '已去'} ${done} / ${scoped.length}`" />
       </div>
 
       <!-- 只有真的在篩選時才出現這一行，沒篩選就零成本 -->
@@ -306,13 +313,13 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         <span class="min-w-0 truncate text-[13px] tabular-nums text-muted">{{ filtered.length }} 個項目</span>
       </div>
 
-      <div v-if="!regions.length && !scoped.length && editable" class="mt-14 text-center">
+      <div v-if="!regions.length && !scoped.length && editable && p.type !== 'gift'" class="mt-14 text-center">
         <p class="text-[17px] font-semibold">先新增第一個地區</p>
         <p class="mt-1.5 text-[14px] leading-relaxed text-muted">例如「東京」「大阪」，之後的地點與購物都能依地區整理。</p>
         <RouterLink :to="`/trips/${tripId}/regions`" class="btn-primary mt-6">新增地區</RouterLink>
       </div>
       <div v-else-if="!scoped.length" class="mt-14 text-center">
-        <p class="text-[17px] font-semibold">{{ { place: '還沒有地點', shopping: '還沒有購物項目', reference: '還沒有參考連結' }[p.type] }}</p>
+        <p class="text-[17px] font-semibold">{{ { place: '還沒有地點', shopping: '還沒有購物項目', gift: '還沒有要送的人', reference: '還沒有參考連結' }[p.type] }}</p>
         <p class="mt-1.5 text-[14px] text-muted">{{ editable ? '按右下角的加號新增第一個。' : '這個分頁還沒有內容。' }}</p>
       </div>
       <div v-else-if="!filtered.length" class="mt-14 text-center">
@@ -401,6 +408,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
           <hr class="my-4 border-line" />
         </template>
 
+        <template v-if="p.type !== 'gift'">
         <h3 class="mb-2 text-[15px] font-semibold">地區</h3>
         <div class="flex flex-wrap gap-2">
           <!-- 複選。「全部」是清空，不是另一個選項，所以沒選任何一個時它就是亮的 -->
@@ -408,9 +416,10 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
           <button v-for="r in regions" :key="r.id" :class="['chip-region', p.regions.includes(r.id) && 'on']" @click="toggleIn(p.regions, r.id)">{{ r.name }}</button>
           <button :class="['chip-region', p.regions.includes('none') && 'on']" @click="toggleIn(p.regions, 'none')">未分類</button>
         </div>
+        </template>
 
         <template v-if="hasStatus">
-          <h3 class="mb-2 mt-5 text-[15px] font-semibold">{{ p.type === 'shopping' ? '購買狀態' : '去過了嗎' }}</h3>
+          <h3 class="mb-2 mt-5 text-[15px] font-semibold">{{ isBuy(p.type) ? '購買狀態' : '去過了嗎' }}</h3>
           <div class="flex flex-wrap gap-2">
             <button v-for="[k, l] in STATUS[p.type]" :key="k" :class="['chip-state', p.status === k && 'on']" @click="toggle('status', k)">{{ l }}</button>
           </div>

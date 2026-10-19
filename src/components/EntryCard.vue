@@ -57,7 +57,9 @@ const timeLabel = computed(() => {
   <article v-if="isLeg" class="relative flex items-center gap-2.5 py-1 pl-2.5">
     <span aria-hidden="true" class="absolute inset-y-0 left-[32px] w-px border-l border-dashed border-tint/45" />
     <button type="button" class="flex min-w-0 flex-1 items-center gap-2.5 text-left" :aria-label="`${title} 的動作`" @click="$emit('menu')">
-      <span class="z-10 flex w-11 shrink-0 justify-center">
+      <!-- relative 不是 z-10：要蓋過的只有上面那條 absolute 虛線，同為 positioned 時照 DOM 順序後畫的在上。
+           給 z-10 會跟頁面的 sticky 標題列（也是 z-10）同一層，捲動時箭頭就浮到標題列上面 -->
+      <span class="relative flex w-11 shrink-0 justify-center">
         <span class="flex size-[22px] items-center justify-center rounded-full bg-tint text-tint-fg">
           <PhArrowRight :size="12" weight="bold" />
         </span>

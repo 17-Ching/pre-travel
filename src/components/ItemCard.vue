@@ -1,8 +1,8 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { PhMapPin, PhShoppingBag, PhCheck, PhDotsThreeVertical, PhYoutubeLogo, PhInstagramLogo, PhThreadsLogo,
+import { PhMapPin, PhShoppingBag, PhGift, PhCheck, PhDotsThreeVertical, PhYoutubeLogo, PhInstagramLogo, PhThreadsLogo,
   PhFacebookLogo, PhXLogo, PhLink } from '@phosphor-icons/vue'
-import { store, user, sourceLabel, linkLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
+import { store, isBuy, user, sourceLabel, linkLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
 import TagChip from './TagChip.vue'
 import Avatar from './Avatar.vue'
 
@@ -13,7 +13,7 @@ const emit = defineEmits(['status', 'visited', 'menu'])
 const thumb = computed(() => thumbOf(props.item.images[0]))
 const region = computed(() => store.regions.find(r => r.id === props.item.regionId)?.name)
 const tags = computed(() => props.item.tagIds.map(id => store.tags.find(g => g.id === id)?.name).filter(Boolean))
-const done = computed(() => (props.item.type === 'shopping' ? props.item.status === 'bought' : props.item.visited))
+const done = computed(() => (isBuy(props.item.type) ? props.item.status === 'bought' : props.item.visited))
 // F-15：已排入行程的徽章。購物不進行程，不用算
 const scheduled = computed(() => (props.item.type === 'place' ? scheduledSlots(props.item.id).length : 0))
 // 縮圖上的來源標示看第一個連結；還有其他連結就加上數量
@@ -79,7 +79,7 @@ function fire(evt) {
         <!-- 沒有照片、或照片載不到時的備援。插畫自己沒放進去就再退回圖示 -->
         <div v-else class="flex size-full items-center justify-center overflow-hidden rounded-[10px] bg-tint-soft text-tint">
           <img v-if="imageOk(ART[item.type])" :src="ART[item.type]" alt="" class="size-[72%] object-contain" @error="imageBroken(ART[item.type])" />
-          <component v-else :is="item.type === 'place' ? PhMapPin : PhShoppingBag" :size="28" />
+          <component v-else :is="{ place: PhMapPin, gift: PhGift }[item.type] ?? PhShoppingBag" :size="28" />
         </div>
         <!-- 來源一眼看得出來：從 Maps 還是 IG 存的 -->
         <span v-if="source" class="absolute bottom-1 left-1 max-w-[80px] truncate rounded-md bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">{{ source }}</span>
@@ -106,7 +106,7 @@ function fire(evt) {
 
     <div class="flex flex-col items-end gap-1.5">
       <template v-if="editable">
-        <button v-if="item.type === 'shopping'" :class="[popping && 'pop',
+        <button v-if="isBuy(item.type)" :class="[popping && 'pop',
           'h-8 rounded-full border px-3 text-[13px] font-semibold whitespace-nowrap transition-colors duration-150',
           item.status === 'bought' ? 'border-transparent bg-accent-soft text-accent'
           : item.status === 'not_found' ? 'border-transparent bg-line text-muted' : 'border-line text-ink']"
