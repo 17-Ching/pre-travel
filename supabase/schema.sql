@@ -162,6 +162,9 @@ create table if not exists public.itinerary_entries (
   note           text not null default '' check (char_length(note) <= 2000),
   -- v2.4.0：自己打的地點可以放圖，格式同 items.images（[{ path, thumbPath, w, h }]）
   images         jsonb not null default '[]'::jsonb,
+  -- v2.9.0：航班與住宿可以附 PDF（電子機票、訂房確認信），格式 [{ path, name, size }]。
+  -- 跟圖片放同一個 media bucket，路徑是 `${trip_id}/<uuid>.pdf`。
+  files          jsonb not null default '[]'::jsonb,
   -- v2.5.0：自己打的地點也能選地區。on delete set null 跟 items.region_id 一樣，
   -- 地區被刪掉只是變成沒有地區，不會連帶刪掉行程那筆
   region_id      uuid references public.regions on delete set null,
@@ -196,7 +199,10 @@ create table if not exists public.itinerary_entries (
   constraint quoted_entry_has_no_images check (item_id is null or images = '[]'::jsonb),
   -- v2.5.0：同理，引用清單的那種地區也跟著清單項目走（前端讀 items.region_id），
   -- 自己再存一份就會有兩個可能互相矛盾的地區
-  constraint quoted_entry_has_no_region check (item_id is null or region_id is null)
+  constraint quoted_entry_has_no_region check (item_id is null or region_id is null),
+  -- v2.9.0：只有航班與住宿會附 PDF。其他 kind 掛檔案沒有地方顯示，
+  -- 刪掉的時候也不會有人想到要清，就變成孤兒檔
+  constraint files_only_on_flight_stay check (kind in ('flight', 'stay') or files = '[]'::jsonb)
 );
 
 -- TripDay：備註、連結、引用的參考三個都空才不留資料列（PRD §4.1 的 F-43）。
@@ -246,6 +252,11 @@ alter table public.itinerary_entries add constraint quoted_entry_has_no_images
   check (item_id is null or images = '[]'::jsonb);
 -- 行程的地區（v2.5.0）。引用清單的那種地區跟著清單項目走
 alter table public.itinerary_entries add column if not exists region_id uuid references public.regions on delete set null;
+-- 航班與住宿的 PDF（v2.9.0）
+alter table public.itinerary_entries add column if not exists files jsonb not null default '[]'::jsonb;
+alter table public.itinerary_entries drop constraint if exists files_only_on_flight_stay;
+alter table public.itinerary_entries add constraint files_only_on_flight_stay
+  check (kind in ('flight', 'stay') or files = '[]'::jsonb);
 alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_region;
 alter table public.itinerary_entries add constraint quoted_entry_has_no_region
   check (item_id is null or region_id is null);
@@ -818,9 +829,14 @@ end $$;
 -- media：私有，路徑第一段是 trip_id，用它判斷成員資格
 -- avatars：公開讀，只能寫自己的資料夾
 
-insert into storage.buckets (id, name, public, file_size_limit)
-values ('media', 'media', false, 5242880)
-on conflict (id) do update set public = false, file_size_limit = 5242880;
+-- allowed_mime_types 明寫成 null（不限類型）：media 從 v2.9.0 起除了 jpeg 還要收
+-- application/pdf（電子機票、訂房確認信）。不寫的話這張表的值由後台設定決定，
+-- 這份檔案就不再是真相 —— 在後台手動加過白名單的專案會莫名其妙擋掉 PDF。
+-- 5 MB 上限同時適用圖片與 PDF，前端的 MAX_FILE_MB 是對齊這個數字。
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('media', 'media', false, 5242880, null)
+on conflict (id) do update set
+  public = false, file_size_limit = 5242880, allowed_mime_types = null;
 
 insert into storage.buckets (id, name, public, file_size_limit)
 values ('avatars', 'avatars', true, 1048576)

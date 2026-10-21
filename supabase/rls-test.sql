@@ -28,7 +28,10 @@ create function auth.uid() returns uuid language sql stable as $$
 $$;
 
 create table storage.buckets (
-  id text primary key, name text, public boolean, file_size_limit bigint
+  id text primary key, name text, public boolean, file_size_limit bigint,
+  -- 正式 Supabase 有這一欄（null = 不限類型）。schema.sql 從 v2.9.0 起會明確
+  -- 設定它，好讓 media 收得下 PDF，mock 少了這欄就會在載入 schema.sql 時炸掉。
+  allowed_mime_types text[]
 );
 create table storage.objects (
   id uuid primary key default gen_random_uuid(),
@@ -409,6 +412,23 @@ select denied(
          :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
          :'tokyo_id', :'ruby'),
   '引用清單的行程項目不能自己選地區');
+
+-- v2.9.0：航班與住宿可以附 PDF，其他 kind 不行。
+-- 這段同時驗了「加欄位不需要補 grant」—— 是以 authenticated 的身分寫入新欄位，
+-- 寫得進去就代表既有的表層授權涵蓋了它（這個 schema 沒有 column-level grant）。
+insert into itinerary_entries (trip_id, date, section, slot, kind, title, files, created_by)
+values (:'trip_id', '2026-11-13', 'schedule', 'morning', 'flight', '桃園 → 成田',
+        '[{"path":"t/e.pdf","name":"eticket.pdf","size":120000}]'::jsonb, :'ruby');
+do $$ begin
+  perform ok((select jsonb_array_length(files) from itinerary_entries where title = '桃園 → 成田') = 1,
+    '航班可以附 PDF');
+end $$;
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, kind, title, files, created_by) values (%L, %L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'morning', 'place', '一般地點',
+         '[{"path":"t/f.pdf","name":"x.pdf","size":100}]', :'ruby'),
+  '只有航班與住宿能附 PDF');
+delete from itinerary_entries where title = '桃園 → 成田';
 
 delete from itinerary_entries where title = '自己打的夜景點';
 
