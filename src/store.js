@@ -211,11 +211,14 @@ const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 // 掛著圖片的東西：清單項目、行程項目、每日備註裡的每一組連結（標題＋連結＋圖片）。
 // 簽名網址與孤兒檔判斷都從這裡拿，新增放圖的地方記得加進來。
 const imageHolders = () => [...store.items, ...store.entries, ...store.days.flatMap(d => d.links ?? [])]
+// 航班與住宿的 PDF 附件。跟圖片同一個 bucket，孤兒檔判斷要一起算
+const entryFiles = () => store.entries.flatMap(e => e.files ?? [])
 // 圖片存的是 bucket 路徑，畫面要的是簽名網址。一次簽一批補上 url 欄位。
 async function attachImageUrls() {
   const paths = [
     ...store.trips.map(t => t.coverPath),
     ...imageHolders().flatMap(i => (i.images ?? []).flatMap(im => [im.path, im.thumbPath])),
+    ...entryFiles().map(f => f.path),
   ]
   const signed = await api.signPaths(paths)
   // 簽不出來（沒網路、storage 掛掉）就原封不動離開。signPaths 失敗是回空 Map 不是丟錯，
@@ -223,6 +226,7 @@ async function attachImageUrls() {
   // 重新整理為止。留著舊網址至少有機會還是好的，真的過期了畫面也有佔位圖接手。
   if (!signed.size && paths.some(Boolean)) return
   for (const t of store.trips) t.cover = signed.get(t.coverPath) || ''
+  for (const f of entryFiles()) f.url = signed.get(f.path) || ''
   for (const i of imageHolders()) for (const im of i.images ?? []) {
     im.url = signed.get(im.path) || ''
     // 縮圖是後來才加的，舊資料沒有 thumbPath，這裡就是空字串，畫面那邊要退回 url
@@ -391,8 +395,26 @@ export async function uploadItemImage(tripId, file, max = MAX.item) {
 // 判斷依據是本地 store，所以前提是該專案的項目都已經載進來了（loadAll 會載齊
 // 專案內所有成員的項目，包含已離開成員留下的）。行程自己打的地點、每日備註也有圖，一起算活著。
 export function sweepImages(candidates) {
-  const gone = unusedPaths(candidates, imageHolders(), store.trips.map(t => t.coverPath))
+  const gone = unusedPaths(candidates, [...imageHolders(), { images: entryFiles() }], store.trips.map(t => t.coverPath))
   if (gone.length) api.removeImages(gone)
+}
+
+// 航班與住宿的 PDF 附件：上傳完順手簽一個網址，畫面上點了就能開
+export const MAX_FILE_MB = 5
+export async function uploadEntryFile(tripId, file) {
+  if (file.size > MAX_FILE_MB * 1024 * 1024) throw new Error(`${file.name} 超過 ${MAX_FILE_MB} MB`)
+  const path = await api.uploadFile(tripId, file)
+  const signed = await api.signPaths([path])
+  return { path, name: file.name.slice(0, 100), size: file.size, url: signed.get(path) || '' }
+}
+// 簽名網址只有一小時，app 開著放久了會過期，所以點的當下再簽一次。
+// 先同步開一個空分頁再把網址填進去：等簽名回來才 window.open 的話，iOS Safari 會當成彈窗擋掉
+export async function openFile(f) {
+  const w = window.open('', '_blank')
+  const signed = await api.signPaths([f.path])
+  const url = signed.get(f.path) || f.url
+  if (w) w.location = url
+  else location.href = url
 }
 
 // F-14 / F-28：連結預覽圖與貼上的圖片網址都要轉存成自己的副本，
@@ -792,7 +814,7 @@ function buildEntry(d, order) {
     links: d.links ?? [],
     transportMode: d.transportMode ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
-    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], regionId: d.regionId ?? null, done: false, order,
+    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], files: d.files ?? [], regionId: d.regionId ?? null, done: false, order,
     detachedAt: null,
     createdBy: store.me, updatedBy: store.me,
     createdAt: now(), updatedAt: now(),
@@ -840,7 +862,10 @@ export function updateEntry(entry, patch) {
   const before = { ...entry }
   Object.assign(entry, patch, { updatedAt: now(), updatedBy: store.me })
   // 編輯時拿掉的圖會變孤兒檔，跟 saveItem 一樣等寫入成功再掃
-  push(() => api.updateEntry(entry.id, patch).then(() => 'images' in patch && sweepImages(imagePaths(before.images))),
+  push(() => api.updateEntry(entry.id, patch).then(() => sweepImages([
+    ...('images' in patch ? imagePaths(before.images) : []),
+    ...('files' in patch ? (before.files ?? []).map(f => f.path) : []),
+  ])),
     () => Object.assign(entry, before))
 }
 
@@ -895,7 +920,8 @@ export function deleteEntry(id) {
   const i = store.entries.findIndex(e => e.id === id)
   if (i < 0) return
   const [removed] = store.entries.splice(i, 1)
-  push(() => api.deleteEntry(id).then(() => sweepImages(imagePaths(removed.images))), () => store.entries.splice(i, 0, removed))
+  push(() => api.deleteEntry(id).then(() => sweepImages([...imagePaths(removed.images), ...(removed.files ?? []).map(f => f.path)])),
+    () => store.entries.splice(i, 0, removed))
 }
 
 // F-43：空備註不留資料列，清空等於刪掉那一筆

@@ -51,6 +51,7 @@ const toEntry = r => ({
   links: r.links ?? [], note: r.note ?? '', done: r.done, order: r.sort_order,
   passengerIds: r.passenger_ids ?? [],
   images: r.images ?? [],
+  files: r.files ?? [],
   regionId: r.region_id ?? null,
   detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
@@ -59,6 +60,9 @@ const toEntry = r => ({
 
 // thumbPath 一定要跟著寫回去（同 itemRow），簽名網址剝掉
 const imagesRow = images => (images ?? []).map(({ path, thumbPath, w, h }) => ({ path, thumbPath, w, h }))
+
+// 附件（PDF）：path 進資料庫，簽名網址（url）是畫面加的，要剝掉
+const filesRow = files => (files ?? []).map(({ path, name, size }) => ({ path, name, size }))
 
 const entryRow = e => ({
   trip_id: e.tripId,
@@ -76,6 +80,7 @@ const entryRow = e => ({
   note: (e.note ?? '').slice(0, 2000),
   passenger_ids: e.passengerIds ?? [],
   images: imagesRow(e.images),
+  files: filesRow(e.files),
   region_id: e.regionId || null,
   done: Boolean(e.done),
   sort_order: e.order ?? 0,
@@ -173,6 +178,15 @@ export async function signPaths(paths) {
   const { data, error } = await sb().storage.from('media').createSignedUrls(uniq, 3600)
   if (error) return new Map()
   return new Map(data.filter(d => d.signedUrl).map(d => [d.path, d.signedUrl]))
+}
+
+// 航班與住宿的 PDF（電子機票、訂房確認信）。跟圖片放同一個 bucket、同一個資料夾規則，
+// bucket 的 file_size_limit（5 MB）照樣擋得住
+export async function uploadFile(tripId, file) {
+  const path = `${tripId}/${crypto.randomUUID()}.pdf`
+  const { error } = await sb().storage.from('media').upload(path, file, { contentType: 'application/pdf' })
+  if (error) throw new Error('檔案上傳失敗：' + error.message)
+  return path
 }
 
 export async function uploadImage(tripId, blob) {
@@ -339,6 +353,7 @@ export async function updateEntry(id, patch) {
   if ('note' in patch) row.note = (patch.note ?? '').slice(0, 2000)
   if ('passengerIds' in patch) row.passenger_ids = patch.passengerIds ?? []
   if ('images' in patch) row.images = imagesRow(patch.images)
+  if ('files' in patch) row.files = filesRow(patch.files)
   if ('regionId' in patch) row.region_id = patch.regionId || null
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done

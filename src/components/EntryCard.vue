@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus } from '@phosphor-icons/vue'
+import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip } from '@phosphor-icons/vue'
 import { store, item, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
@@ -27,6 +27,8 @@ const isTransport = computed(() => props.entry.kind !== 'place')
 // 航班與住宿不走這條：它們各自成區，本來就是獨立的一筆，不是誰與誰之間。
 const isLeg = computed(() => props.entry.kind === 'transport')
 // 誰搭這班。沒指定就是全員，不佔版面
+// 航班與住宿的卡片是圖示不是縮圖，看不出有沒有放登機證、訂房確認信，標個數量
+const attachments = computed(() => (props.entry.images?.length ?? 0) + (props.entry.files?.length ?? 0))
 const passengers = computed(() => (props.entry.passengerIds ?? []).map(user).filter(Boolean))
 // 連結來源標在縮圖上，跟清單卡片同一套（ItemCard），有沒有東西可看一眼就知道
 const source = computed(() => {
@@ -114,6 +116,7 @@ const timeLabel = computed(() => {
         <span v-if="region" class="mb-1 inline-flex items-center rounded-md bg-tint-soft px-1.5 py-0.5 text-[11px] font-medium text-tint">{{ region }}</span>
         <span :class="['line-clamp-2 text-[15px] font-semibold leading-snug wrap-anywhere', entry.done && 'line-through decoration-1']">{{ title }}</span>
         <span v-if="isTransport && entry.transportMode" class="mt-0.5 block truncate text-[12px] text-tint">{{ entry.transportMode }}</span>
+        <span v-if="isTransport && attachments" class="mt-0.5 flex items-center gap-1 text-[11px] text-muted"><PhPaperclip :size="12" />{{ attachments }} 個附件</span>
         <!-- 同一天好幾班時，靠這排頭像分辨誰搭哪一班 -->
         <span v-if="passengers.length" class="mt-1 flex flex-wrap items-center gap-1.5">
           <span v-for="u in passengers" :key="u.id" class="inline-flex items-center gap-1 rounded-full bg-tint-soft px-1.5 py-0.5 text-[11px] text-tint">

@@ -1,15 +1,16 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPencilSimple, PhWarning,
-  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate } from '@phosphor-icons/vue'
+  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate, PhFilePdf } from '@phosphor-icons/vue'
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
   dayNote, dayLinks, dayRefs, setDayNote, addEntry, addEntries, updateEntry,
   toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
-  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, linkify } from '../store'
+  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, linkify, openFile } from '../store'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
 import ImagePicker from './ImagePicker.vue'
+import FilePicker from './FilePicker.vue'
 import ImageZoom from './ImageZoom.vue'
 import LinkFields from './LinkFields.vue'
 
@@ -110,7 +111,7 @@ const addNoteDesc = d => (noteDraft.value = (noteDraft.value ? noteDraft.value +
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
 const ARROW = ' → '
 const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [],
-  passengerIds: [], images: [], regionId: '', startDate: '', endDate: '', from: '', to: '' })
+  passengerIds: [], images: [], files: [], regionId: '', startDate: '', endDate: '', from: '', to: '' })
 const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
 const MODES = ['步行', '電車', '巴士', '計程車', '開車', '飛機', '船']
@@ -135,13 +136,16 @@ function openEdit(entry) {
   form.value = { title: entry.itemId ? '' : entry.title, kind: entry.kind, transportMode: entry.transportMode || '',
     startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
     links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])],
-    images: JSON.parse(JSON.stringify(entry.images ?? [])), regionId: entry.regionId ?? '',
+    images: JSON.parse(JSON.stringify(entry.images ?? [])), files: JSON.parse(JSON.stringify(entry.files ?? [])), regionId: entry.regionId ?? '',
     startDate: entry.date, endDate: entry.endDate || '', from, to }
   formFor.value = { entry }
 }
 const editingRef = computed(() => Boolean(formFor.value?.entry?.itemId)) // 引用的項目標題不可改（F-38）
-// 只有自己打的地點有自己的圖與地區。引用清單的照片、地區跟著清單走（Q10），航班、住宿、交通都沒有
-const hasImages = computed(() => form.value.kind === 'place' && !editingRef.value)
+// 地區只有自己打的地點有。引用清單的照片、地區跟著清單走（Q10）。
+// 圖片：自己打的地點，加上航班與住宿（登機證截圖、飯店外觀）；航班與住宿另外可以放 PDF。交通都沒有
+const hasRegion = computed(() => form.value.kind === 'place' && !editingRef.value)
+const hasFiles = computed(() => ['flight', 'stay'].includes(form.value.kind))
+const hasImages = computed(() => hasRegion.value || hasFiles.value)
 // 地區選單跟清單表單同一套：最後一個選項是當場新增
 function onRegion(e) {
   if (e.target.value !== '__new') return (form.value.regionId = e.target.value)
@@ -192,7 +196,8 @@ function submitForm() {
     links: f.links.filter(l => l.url.trim()),
     passengerIds: f.kind === 'flight' ? [...f.passengerIds] : [],
     images: hasImages.value ? f.images : [],
-    regionId: hasImages.value ? f.regionId || null : null,
+    regionId: hasRegion.value ? f.regionId || null : null,
+    files: hasFiles.value ? f.files : [],
     // 住宿是唯一自己帶日期區間的：編輯時連入住日一起改，不走「搬到其他天」
     ...(isStay.value ? { date: stayStart.value, endDate: f.endDate } : {}),
   }
@@ -602,8 +607,7 @@ const addFor = ref(null)
           這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走；下面的備註與連結只屬於行程這一筆。
         </p>
 
-        <!-- formFor 也要擋：抽屜關掉時拆掉它，才會清掉上傳了卻沒存的圖 -->
-        <div v-if="hasImages">
+        <div v-if="hasRegion">
           <label class="label" for="e-region">地區（選填）</label>
           <select id="e-region" class="input" :value="form.regionId" @change="onRegion">
             <option value="">未分類</option>
@@ -612,7 +616,6 @@ const addFor = ref(null)
           </select>
         </div>
 
-        <ImagePicker v-if="formFor && hasImages" ref="picker" :images="form.images" :trip-id="tripId" />
 
         <div v-if="isFlight">
           <label class="label" for="e-mode">航空公司與班次</label>
@@ -665,6 +668,10 @@ const addFor = ref(null)
           抵達時間比起飛早，會標示成隔天抵達
         </p>
 
+        <!-- formFor 也要擋：抽屜關掉時拆掉它們，才會清掉上傳了卻沒存的圖和檔案 -->
+        <ImagePicker v-if="formFor && hasImages" ref="picker" :images="form.images" :trip-id="tripId" />
+        <FilePicker v-if="formFor && hasFiles" :files="form.files" :trip-id="tripId" />
+
         <div>
           <label class="label" for="e-note">備註（選填）</label>
           <textarea id="e-note" v-model="form.note" class="input h-28 resize-y py-2.5" maxlength="2000"
@@ -693,6 +700,13 @@ const addFor = ref(null)
             <img :src="thumbOf(im)" alt="" class="size-20 rounded-lg bg-line object-cover" @error="imageBroken(thumbOf(im))" />
           </button>
         </template>
+      </div>
+      <!-- 航班、住宿的 PDF。點了當下才簽網址（簽名一小時就過期），在新分頁用瀏覽器內建的檢視器開 -->
+      <div v-if="entryMenu?.files?.length" class="mb-1 border-b border-line pb-1">
+        <button v-for="f in entryMenu.files" :key="f.path" class="row" @click="openFile(f)">
+          <PhFilePdf :size="20" class="shrink-0 text-danger" />
+          <span class="min-w-0 flex-1 truncate">{{ f.name }}</span>
+        </button>
       </div>
       <!-- 卡片上的備註是截斷的，抽屜裡給完整內容 -->
       <p v-if="entryMenu?.note" class="mb-1 max-h-48 overflow-auto whitespace-pre-line border-b border-line px-3 pb-3 text-[14px] leading-relaxed text-muted"><span v-html="linkify(entryMenu.note)" /></p>
