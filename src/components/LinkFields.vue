@@ -2,23 +2,30 @@
 import { PhX, PhPlus } from '@phosphor-icons/vue'
 import { MAX_LINKS, newLink, sourceLabel } from '../store'
 import { useLinkPreview } from '../link-preview'
+import ImagePicker from './ImagePicker.vue'
 
 // 命名連結的編輯欄（F-14）。清單項目、行程項目、每日備註共用。
 // links 陣列由呼叫端擁有，這裡直接改它。抓預覽與填連結標題在這裡做；
 // 抓到之後還要做什麼（補項目標題、轉存預覽圖）各自不同，所以丟 preview 事件讓呼叫端接。
 // 「加入備註」也是丟 desc 事件，備註欄在呼叫端手上。
-const props = defineProps({ links: Array, label: String,
+//
+// withImages（每日備註用）：每一組變成「標題＋連結＋圖片」，連結可以空著只放圖。
+// 貼上的網址有預覽圖、這組又還沒有圖時，預覽圖自動轉存成第一張。
+const props = defineProps({ links: Array, label: String, withImages: Boolean, tripId: String,
   placeholder: { type: String, default: '貼上 Google Maps、IG 或網頁連結' } })
 const emit = defineEmits(['preview', 'desc'])
 const { previews, load } = useLinkPreview()
 
+const pickers = {}   // link id → 那組的 ImagePicker
 async function onUrl(l) {
   const d = await load(l)
-  if (d) emit('preview', d)
+  if (!d) return
+  if (props.withImages && d.image) pickers[l.id]?.addFromPreview(d.image)
+  emit('preview', d)
 }
 // paste 事件當下 input 的值還是舊的，要等瀏覽器寫進去才讀得到
 const onPaste = l => setTimeout(() => onUrl(l))
-function add() { if (props.links.length < MAX_LINKS) props.links.push(newLink()) }
+function add() { if (props.links.length < MAX_LINKS) props.links.push(props.withImages ? { ...newLink(), images: [] } : newLink()) }
 </script>
 
 <template>
@@ -27,7 +34,7 @@ function add() { if (props.links.length < MAX_LINKS) props.links.push(newLink())
     <div v-if="links.length" class="grid gap-2">
       <div v-for="(l, i) in links" :key="l.id" class="overflow-hidden rounded-xl border border-line bg-card p-2.5">
         <div class="flex items-center gap-2">
-          <input v-model="l.title" class="input h-9 min-w-0 flex-1" maxlength="40" placeholder="連結標題（選填）" />
+          <input v-model="l.title" class="input h-9 min-w-0 flex-1" maxlength="40" :placeholder="withImages ? '標題（例：鳥居跑步 reels）' : '連結標題（選填）'" />
           <button class="icon-btn size-8 shrink-0 text-muted" aria-label="移除這個連結" @click="links.splice(i, 1)"><PhX :size="16" /></button>
         </div>
         <input v-model="l.url" type="url" inputmode="url" class="input mt-2 h-9" :placeholder="placeholder"
@@ -39,6 +46,7 @@ function add() { if (props.links.length < MAX_LINKS) props.links.push(newLink())
           <button v-if="previews[l.id]?.data?.description" class="truncate text-[12px] font-medium text-accent"
             @click="emit('desc', previews[l.id].data.description)">加入備註</button>
         </div>
+        <ImagePicker v-if="withImages" :ref="c => (pickers[l.id] = c)" class="mt-2.5" :images="l.images" :trip-id="tripId" label="圖片（選填）" />
       </div>
     </div>
     <button v-if="links.length < MAX_LINKS" class="btn-ghost mt-2 h-9 w-full text-[14px]" @click="add">

@@ -53,17 +53,18 @@ for (const f of folders) {
 
 // service role 繞過 RLS，所以這裡拿得到全部 —— 包含軟刪除專案底下的項目，
 // 那些資料列還在，圖片就還算有人引用，不能掃掉。
-// 行程自己打的地點也有圖（v2.4.0），漏了它們就會被當成孤兒刪掉
-const [items, entries, trips] = await Promise.all([
+// 行程自己打的地點（v2.4.0）、每日備註的連結（v2.8.0，圖片在 links[].images）也有圖，漏了就會被當成孤兒刪掉
+const [items, entries, days, trips] = await Promise.all([
   sb.from('items').select('images'),
   sb.from('itinerary_entries').select('images'),
+  sb.from('trip_days').select('links'),
   sb.from('trips').select('cover_path'),
 ])
-for (const r of [items, entries, trips]) if (r.error) throw new Error('讀取資料列失敗：' + r.error.message)
+for (const r of [items, entries, days, trips]) if (r.error) throw new Error('讀取資料列失敗：' + r.error.message)
 
 const cutoff = Date.now() - GRACE_HOURS * 3600e3
 const old = files.filter(f => new Date(f.at).getTime() < cutoff)
-const orphans = new Set(unusedPaths(old.map(f => f.path), [...items.data, ...entries.data], trips.data.map(t => t.cover_path)))
+const orphans = new Set(unusedPaths(old.map(f => f.path), [...items.data, ...entries.data, ...days.data.flatMap(d => d.links ?? [])], trips.data.map(t => t.cover_path)))
 const doomed = files.filter(f => orphans.has(f.path))
 
 console.log(`bucket 裡 ${files.length} 個檔案，資料列引用 ${items.data.length} 個項目 / ${trips.data.length} 個專案`)

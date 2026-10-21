@@ -361,10 +361,14 @@ export async function deleteEntry(id) {
   must(await sb().from('itinerary_entries').delete().eq('id', id).select(), '刪除行程項目')
 }
 
-// 每日備註、連結、引用的參考都空就不該有資料列，所以用 upsert 而不是先查再決定
-export async function saveDayNote(tripId, date, note, links, refIds, userId) {
+// 每日備註的連結是一組一組的「標題＋連結＋圖片」，圖片一樣要剝掉簽名網址
+const dayLinksRow = links => (links ?? []).filter(l => l.url?.trim() || l.images?.length)
+  .map(({ id, url, title, images }) => ({ id, url: url ?? '', title: title ?? '', images: imagesRow(images) }))
+
+// 每日備註的文字、連結、引用的參考都空就不該有資料列，所以用 upsert 而不是先查再決定
+export async function saveDayNote(tripId, date, { note, links, refIds }, userId) {
   const { data, error } = await sb().from('trip_days')
-    .upsert({ trip_id: tripId, date, note: (note ?? '').slice(0, 500), links: (links ?? []).filter(l => l.url?.trim()), ref_ids: refIds ?? [], updated_by: userId, updated_at: new Date().toISOString() },
+    .upsert({ trip_id: tripId, date, note: (note ?? '').slice(0, 500), links: dayLinksRow(links), ref_ids: refIds ?? [], updated_by: userId, updated_at: new Date().toISOString() },
             { onConflict: 'trip_id,date' })
     .select().single()
   if (error) throw new Error('儲存當天備註失敗：' + error.message)

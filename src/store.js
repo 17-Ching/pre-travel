@@ -208,11 +208,14 @@ export function prefs(tripId) {
 const touch = tripId => { const t = trip(tripId); if (t) t.updatedAt = now() }
 
 // ---- 載入
+// 掛著圖片的東西：清單項目、行程項目、每日備註裡的每一組連結（標題＋連結＋圖片）。
+// 簽名網址與孤兒檔判斷都從這裡拿，新增放圖的地方記得加進來。
+const imageHolders = () => [...store.items, ...store.entries, ...store.days.flatMap(d => d.links ?? [])]
 // 圖片存的是 bucket 路徑，畫面要的是簽名網址。一次簽一批補上 url 欄位。
 async function attachImageUrls() {
   const paths = [
     ...store.trips.map(t => t.coverPath),
-    ...[...store.items, ...store.entries].flatMap(i => i.images.flatMap(im => [im.path, im.thumbPath])),
+    ...imageHolders().flatMap(i => (i.images ?? []).flatMap(im => [im.path, im.thumbPath])),
   ]
   const signed = await api.signPaths(paths)
   // 簽不出來（沒網路、storage 掛掉）就原封不動離開。signPaths 失敗是回空 Map 不是丟錯，
@@ -220,7 +223,7 @@ async function attachImageUrls() {
   // 重新整理為止。留著舊網址至少有機會還是好的，真的過期了畫面也有佔位圖接手。
   if (!signed.size && paths.some(Boolean)) return
   for (const t of store.trips) t.cover = signed.get(t.coverPath) || ''
-  for (const i of [...store.items, ...store.entries]) for (const im of i.images) {
+  for (const i of imageHolders()) for (const im of i.images ?? []) {
     im.url = signed.get(im.path) || ''
     // 縮圖是後來才加的，舊資料沒有 thumbPath，這裡就是空字串，畫面那邊要退回 url
     im.thumbUrl = signed.get(im.thumbPath) || ''
@@ -386,9 +389,9 @@ export async function uploadItemImage(tripId, file, max = MAX.item) {
 // 項目救回畫面，但檔案已經沒了，使用者看到的是破圖。孤兒檔可以之後再掃，破圖回不來。
 //
 // 判斷依據是本地 store，所以前提是該專案的項目都已經載進來了（loadAll 會載齊
-// 專案內所有成員的項目，包含已離開成員留下的）。行程自己打的地點也有圖，一起算活著。
+// 專案內所有成員的項目，包含已離開成員留下的）。行程自己打的地點、每日備註也有圖，一起算活著。
 export function sweepImages(candidates) {
-  const gone = unusedPaths(candidates, [...store.items, ...store.entries], store.trips.map(t => t.coverPath))
+  const gone = unusedPaths(candidates, imageHolders(), store.trips.map(t => t.coverPath))
   if (gone.length) api.removeImages(gone)
 }
 
@@ -896,28 +899,34 @@ export function deleteEntry(id) {
 }
 
 // F-43：空備註不留資料列，清空等於刪掉那一筆
-// v2.7.0 起每日備註也能放連結、引用參考：三個都空才不留資料列
+// 每日備註：文字、連結、引用的參考，三個都空才不留資料列（F-43 的延伸）。
+// 每日備註的「連結」是一組一組的「標題＋連結＋圖片」，網址和圖片至少要有一樣才算數。
+const dayLinkFilled = l => l.url?.trim() || l.images?.length
 export function setDayNote(tripId, date, { note, links, refIds }) {
-  note = (note ?? '').slice(0, 500)
-  links = (links ?? []).filter(l => l.url?.trim())
-  refIds = [...(refIds ?? [])]
+  const fields = {
+    note: (note ?? '').slice(0, 500),
+    links: (links ?? []).filter(dayLinkFilled),
+    refIds: [...(refIds ?? [])],
+  }
   const existing = store.days.find(d => d.tripId === tripId && d.date === date)
   const before = existing ? { ...existing } : null
+  // 拿掉的圖會變孤兒檔，跟 saveItem 一樣等寫入成功再掃
+  const sweepOld = () => before && sweepImages(imagePaths((before.links ?? []).flatMap(l => l.images ?? [])))
 
-  if (!note.trim() && !links.length && !refIds.length) {
+  if (!fields.note.trim() && !fields.links.length && !fields.refIds.length) {
     if (!existing) return
     store.days.splice(store.days.indexOf(existing), 1)
-    push(() => api.deleteDayNote(tripId, date), () => store.days.push(reactive(before)))
+    push(() => api.deleteDayNote(tripId, date).then(sweepOld), () => store.days.push(reactive(before)))
     return
   }
   if (existing) {
-    Object.assign(existing, { note, links, refIds, updatedBy: store.me, updatedAt: now() })
-    push(() => api.saveDayNote(tripId, date, note, links, refIds, store.me), () => Object.assign(existing, before))
+    Object.assign(existing, fields, { updatedBy: store.me, updatedAt: now() })
+    push(() => api.saveDayNote(tripId, date, fields, store.me).then(sweepOld), () => Object.assign(existing, before))
     return
   }
-  const created = reactive({ tripId, date, note, links, refIds, updatedBy: store.me, updatedAt: now() })
+  const created = reactive({ tripId, date, ...fields, updatedBy: store.me, updatedAt: now() })
   store.days.push(created)
-  push(() => api.saveDayNote(tripId, date, note, links, refIds, store.me), () => {
+  push(() => api.saveDayNote(tripId, date, fields, store.me), () => {
     const i = store.days.indexOf(created)
     if (i >= 0) store.days.splice(i, 1)
   })

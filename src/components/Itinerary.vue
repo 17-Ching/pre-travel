@@ -69,7 +69,8 @@ const linksDraft = ref([])
 const refsDraft = ref([])   // 引用的參考 item id
 function openNote() {
   noteDraft.value = dayNote(props.tripId, date.value)
-  linksDraft.value = JSON.parse(JSON.stringify(dayLinks(props.tripId, date.value)))
+  // 舊資料的連結沒有 images，補一個空陣列，圖片欄才有地方放
+  linksDraft.value = JSON.parse(JSON.stringify(dayLinks(props.tripId, date.value))).map(l => ({ images: [], ...l }))
   refsDraft.value = dayRefs(props.tripId, date.value).map(i => i.id)
   noteOpen.value = true
 }
@@ -471,9 +472,23 @@ const addFor = ref(null)
               </a>
             </span>
           </span>
-          <!-- 自己打的連結攤成一排可以點的小按鈕；真的 <a>，手機上 Maps 連結會跳 App -->
-          <span v-if="dayLinks(tripId, date).length" class="flex flex-wrap gap-1.5">
-            <a v-for="l in dayLinks(tripId, date)" :key="l.id" :href="l.url" target="_blank" rel="noopener"
+          <!-- 自己加的連結：有圖的那組做成小卡（標題、照片、連結），沒圖的攤成一顆顆按鈕 -->
+          <span v-for="l in dayLinks(tripId, date).filter(l => l.images?.length)" :key="l.id" class="block rounded-[10px] bg-surface-2 p-2">
+            <span v-if="l.title?.trim()" class="block truncate text-[13px] font-semibold">{{ l.title }}</span>
+            <span :class="['flex gap-1.5 overflow-x-auto', l.title?.trim() && 'mt-1.5']">
+              <template v-for="(im, i) in l.images" :key="im.path">
+                <button v-if="imageOk(thumbOf(im))" class="shrink-0 cursor-zoom-in" :aria-label="`放大「${l.title || '這組'}」第 ${i + 1} 張照片`" @click="openZoom(l.images, i, l.title)">
+                  <img :src="thumbOf(im)" alt="" class="size-16 rounded-md bg-line object-cover" @error="imageBroken(thumbOf(im))" />
+                </button>
+              </template>
+            </span>
+            <a v-if="l.url?.trim()" :href="l.url" target="_blank" rel="noopener"
+              class="mt-1.5 inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-line bg-card px-2.5 text-[12px] font-medium">
+              <PhArrowSquareOut :size="13" class="shrink-0 text-accent" /><span class="truncate">{{ sourceLabel(l.url) || '開啟連結' }}</span>
+            </a>
+          </span>
+          <span v-if="dayLinks(tripId, date).some(l => !l.images?.length)" class="flex flex-wrap gap-1.5">
+            <a v-for="l in dayLinks(tripId, date).filter(l => !l.images?.length)" :key="l.id" :href="l.url" target="_blank" rel="noopener"
               class="inline-flex h-7 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2 px-2.5 text-[12px] font-medium">
               <PhArrowSquareOut :size="13" class="shrink-0 text-accent" /><span class="truncate">{{ linkLabel(l) }}</span>
             </a>
@@ -871,7 +886,9 @@ const addFor = ref(null)
             <PhFilmSlate :size="16" weight="bold" />從參考加入
           </button>
         </div>
-        <LinkFields :links="linksDraft" @desc="addNoteDesc" />
+        <!-- 一組一組的「標題＋連結＋圖片」。v-if noteOpen：抽屜關掉時拆掉，才會清掉上傳了卻沒存的圖 -->
+        <LinkFields v-if="noteOpen" :links="linksDraft" with-images :trip-id="tripId" label="連結與圖片（最多 5 組）"
+          placeholder="貼上網址（選填，可以只放圖）" @desc="addNoteDesc" />
       </div>
       <template #footer>
         <button class="btn-primary h-12 w-full" @click="saveNote">儲存</button>
