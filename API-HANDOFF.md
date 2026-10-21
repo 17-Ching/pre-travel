@@ -128,6 +128,20 @@ psql -f supabase/rls-test.sql
 
 這些規則藏在 SQL 或設定裡，只看前端看不到，最容易被下一個人重複實作或踩到。
 
+**新建資料表一定要自己附 GRANT**
+2026-10-30 起 Supabase 不再自動把 `public` schema 的新表授權給 Data API 角色。這不只影響重建環境 —— **在正式庫跑的建表 migration 一樣會中**，前端拿到 `42501 permission denied for table ...`（錯誤訊息會直接附上該下的 GRANT）。既有的表不受影響，不用補跑。
+
+所以每一支 `create table` 的 migration 都要跟著這兩行，跟 `enable row level security` 和 policy 放在同一個交易裡：
+
+```sql
+grant select, insert, update, delete on public.新表 to authenticated, service_role;
+grant execute on all functions in schema public to authenticated, service_role;  -- 有新 RPC 時
+```
+
+`anon` 不給（全站都要登入，anon 從來不查表）。sequence 也不用管，這個 schema 沒有 `serial` / `identity` 欄位，主鍵全是 uuid —— 哪天真的加了，就還要 `grant usage, select on sequence`。
+
+[`schema.sql`](supabase/schema.sql) 第 7 節只涵蓋「跑它當下已存在的表」，不會幫之後的 migration 代勞。刻意不用 `alter default privileges` 把自動授權開回來：那等於退回「忘記 revoke 就全部曝光」的姿勢，Supabase 官方也不建議。
+
 **帳號大小寫**
 `profiles` 的唯一索引是 `lower(username)` 函式索引，所以 Jean 和 jean 搶不到同一個帳號，但**存進去的是使用者打的原樣**。要用帳號查詢時條件必須寫 `lower(username) = lower($1)` 或 `ilike`，直接 `.eq('username', x)` 會變成大小寫敏感而且吃不到索引。
 
@@ -245,7 +259,10 @@ Supabase 那邊的設定：Confirm email 關閉；`media` bucket 私有、`avata
 ```
 api/preview.js        連結預覽 / 圖片轉存（Vercel Function，唯一的伺服器端程式）
 supabase/
-  schema.sql          資料表、RLS、RPC、觸發器、Storage。可重複執行
+  schema.sql          資料表、RLS、RPC、觸發器、Storage、Data API 授權。可重複執行
+                      第 7 節的 GRANT 不能省：2026-10-30 起 Supabase 不再自動
+                      授權 public schema 的新表，少了它重建出來的環境每張表
+                      都是 42501。正式庫既有的表不受影響，不需要補跑
   migrate-v2.sql      v1 → v2.0 的一次性遷移。會刪資料，跟 schema.sql 刻意分開
   migrate-tags-rls.sql  F-22 標籤讀取放寬到同專案成員。只動 tags 的 policy，
                         可重複執行。正式庫跑這支就好，不要為了這個重跑 schema.sql

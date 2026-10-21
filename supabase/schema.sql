@@ -864,3 +864,27 @@ create policy pretravel_avatar_update on storage.objects for update
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy pretravel_avatar_delete on storage.objects for delete
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ---------- 7. Data API 的表層授權 ----------
+-- 2026-10-30 起 Supabase 不再自動把 public schema 的新表授權給 Data API 角色，
+-- 所以這份檔案必須自己授權，否則拿它重建出來的環境（新專案、preview branch）
+-- 每一張表都會回 42501 permission denied —— PostgREST 在 RLS 之前就被擋掉了。
+-- 正式庫既有的表不受那個變更影響（ALTER DEFAULT PRIVILEGES 只作用於未來建立的
+-- 物件），所以這一段對現有正式庫是補跑無害，不是必要的修復。
+--
+-- 放在檔案最後：涵蓋上面建的每一張表。之後如果新增「不該讓前端看到」的表
+-- （佇列、稽核紀錄之類），記得在這段之後把它 revoke 回去。
+--
+-- 只授權 authenticated 與 service_role：
+--   anon  —— 全站都要登入（router 的守衛），anon 從來不查表，不需要給。
+--             正式庫因為舊的自動授權仍然持有 anon 的 grant，那是無害的
+--             （所有 policy 都要 auth.uid() 或成員資格，anon 一列都讀不到），
+--             這裡刻意不複製，重建出來的環境會比正式庫更緊一點。
+--   service_role —— npm run sweep 掃孤兒檔要用。
+grant usage on schema public to authenticated, service_role;
+grant select, insert, update, delete on all tables in schema public
+  to authenticated, service_role;
+-- sequence 不用管：這個 schema 的主鍵全是 uuid，沒有 serial / identity 欄位。
+-- function 的 EXECUTE 目前仍由 PostgreSQL 的 PUBLIC 預設涵蓋（Supabase 說那是
+-- 刻意不處理的），這裡明寫一份，哪天 PUBLIC 那條被收掉也不會整批 RPC 掛掉。
+grant execute on all functions in schema public to authenticated, service_role;

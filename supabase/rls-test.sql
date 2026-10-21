@@ -40,18 +40,25 @@ create function storage.foldername(name text) returns text[] language sql immuta
   select string_to_array(regexp_replace(name, '/[^/]*$', ''), '/');
 $$;
 
--- 角色是叢集層級的，重跑時不會被 drop schema 清掉
+-- 角色是叢集層級的，重跑時不會被 drop schema 清掉。
+-- service_role 本身不參與測試，但 schema.sql 的授權段會提到它，沒有就會報錯。
 do $$ begin
   create role authenticated nologin;
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  create role service_role nologin;
 exception when duplicate_object then null;
 end $$;
 
 -- ── 受測對象 ────────────────────────────────────────────────
 \ir schema.sql
 
-grant usage on schema public to authenticated;
-grant all on all tables in schema public to authenticated;
-grant execute on all functions in schema public to authenticated;
+-- 這裡刻意不再 grant public schema 的表與函式 —— schema.sql 第 7 節自己會授權。
+-- 以前這裡是 `grant all on all tables in schema public`，那會蓋掉真實的授權狀態：
+-- 就算 schema.sql 一條 grant 都沒有，測試照樣全過，而重建出來的環境每張表都是
+-- 42501。現在測試跑的是正式環境真正會有的那組權限。
+--
 -- 正式 Supabase 的 authenticated 本來就叫得動 auth.uid()，這個 mock 要補上才一致。
 -- 少了它，security definer 的函式看不出差別（它們用的是擁有者權限），但 security
 -- invoker 的 RPC 一進去就 permission denied for schema auth —— 那是harness 的差異，
