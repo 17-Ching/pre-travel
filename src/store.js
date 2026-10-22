@@ -344,17 +344,51 @@ watch(() => [store.me, store.ready, store.loading, store.pending, ...DATA_KEYS.m
 addEventListener('offline', () => { store.offline = true })
 addEventListener('online', () => { store.offline = false })
 
-// 照片的縮圖和機票、訂房的 PDF 先抓一輪，讓 service worker 存起來（public/sw.js），
-// 斷網時才看得到。原圖不抓（一張一兩百 KB，全部抓太重），看過的原圖 service worker 一樣會留。
-// 只抓還沒結束的旅程。沒有 service worker（開發模式、不支援的瀏覽器）就不抓，抓了也存不起來。
+// 手機裡要留的照片與 PDF：還沒結束的旅程裡，清單項目、行程項目、每日備註每組連結的圖，加上航班住宿的 PDF。
+// 已結束的旅程、已經刪掉的東西都不在這裡，下面的清理會把它們從手機刪掉。
+function offlineMedia() {
+  const live = new Set(myTrips().filter(t => !tripPast(t)).map(t => t.id))
+  const images = [
+    ...[...store.items, ...store.entries].filter(x => live.has(x.tripId)).flatMap(x => x.images ?? []),
+    ...store.days.filter(d => live.has(d.tripId)).flatMap(d => (d.links ?? []).flatMap(l => l.images ?? [])),
+  ]
+  const files = store.entries.filter(e => live.has(e.tripId)).flatMap(e => e.files ?? [])
+  return { images, files }
+}
+
+// 連網載入完資料之後跑一次（只在有 service worker 的正式版，開發模式抓了也存不起來）：
+// 1. 清理：手機裡存著、但已經用不到的照片與 PDF 刪掉，不然每趟旅程的檔案會一直累積下去。
+// 2. 預存：縮圖和 PDF 先抓一輪讓 service worker 存起來，斷網時才看得到。
+//    原圖不抓（一張一兩百 KB，全部抓太重），看過的原圖 service worker 一樣會留，下次清理時照規則處理。
+const MEDIA_CACHE = 'onway-media-v1'   // 跟 public/sw.js 的 MEDIA 同名，改一邊要改另一邊
 async function warmMediaCache() {
   if (!navigator.serviceWorker?.controller) return
-  const live = new Set(myTrips().filter(t => !tripPast(t)).map(t => t.id))
-  const urls = [
-    ...[...store.items, ...store.entries].filter(x => live.has(x.tripId)).flatMap(x => (x.images ?? []).map(thumbOf)),
-    ...store.days.filter(d => live.has(d.tripId)).flatMap(d => (d.links ?? []).flatMap(l => (l.images ?? []).map(thumbOf))),
-    ...store.entries.filter(e => live.has(e.tripId)).flatMap(e => (e.files ?? []).map(f => f.url)),
-  ].filter(Boolean)
+  const { images, files } = offlineMedia()
+
+  // service worker 存的 key 是去掉簽名 query 的網址：…/storage/v1/object/sign/media/<trip>/<file>
+  // 從裡面拆出 bucket 路徑，跟資料裡的 path / thumbPath 比對。頭像（avatars bucket）不在清理範圍
+  const keep = new Set([...imagePaths(images), ...files.map(f => f.path)])
+  try {
+    const cache = await caches.open(MEDIA_CACHE)
+    for (const req of await cache.keys()) {
+      const m = new URL(req.url).pathname.match(/\/object\/sign\/media\/(.+)$/)
+      if (m && !keep.has(decodeURIComponent(m[1]))) await cache.delete(req)
+    }
+  } catch { /* 清不掉就算了，下次載入再試，不影響使用 */ }
+
+  // 舊版的程式檔也清掉：/assets/* 每次升版檔名都會換（帶 hash），舊的留著沒人會再用，
+  // 一版約 700 KB，不清的話每更新一次就多一份。現在這頁載入的就是要留的那份
+  try {
+    const current = new Set([...document.querySelectorAll('script[src], link[rel="stylesheet"]')]
+      .map(el => new URL(el.src || el.href).pathname))
+    const shell = await caches.open('onway-shell-v1')   // 跟 public/sw.js 的 SHELL 同名
+    for (const req of await shell.keys()) {
+      const p = new URL(req.url).pathname
+      if (p.startsWith('/assets/') && !current.has(p)) await shell.delete(req)
+    }
+  } catch { /* 同上 */ }
+
+  const urls = [...images.map(thumbOf), ...files.map(f => f.url)].filter(Boolean)
   // 一次四個，不要一口氣丟幾百個請求把頻寬塞爆
   for (let i = 0; i < urls.length; i += 4) {
     await Promise.all(urls.slice(i, i + 4).map(u => fetch(u).catch(() => {})))

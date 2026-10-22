@@ -9,8 +9,8 @@
 //    同一個檔案只存一份，離線時拿過期的網址也對得到。
 //
 // 資料本身（PostgREST、Auth）不經過這裡：那些存在 IndexedDB 的快照（src/offline-cache.js）。
-const SHELL = 'onway-shell-v1'
-const MEDIA = 'onway-media-v1'
+const SHELL = 'onway-shell-v1'   // src/store.js 清舊版程式檔時也用這個名字
+const MEDIA = 'onway-media-v1'   // src/store.js 的 MEDIA_CACHE 用同一個名字清理過期檔案，改一邊要改另一邊
 
 self.addEventListener('install', e => {
   self.skipWaiting()
