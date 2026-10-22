@@ -4,8 +4,9 @@
 // 這也是 PRD F-19 / F-33 要的行為，離線佇列之後接在同一個位置。
 import { reactive, watch } from 'vue'
 import * as api from './api'
-import { WEEK, parseDate, todayISO, addDays, coversDate } from './date-rules'
+import { WEEK, parseDate, todayISO, addDays, coversDate, tripPast } from './date-rules'
 import { imagePaths, unusedPaths } from './image-rules'
+import { getSnapshot, setSnapshot, delSnapshot } from './offline-cache'
 import { sb, isConfigured, signIn as authSignIn, signUp as authSignUp, signOut as authSignOut } from './supabase'
 
 const uid = () => crypto.randomUUID()
@@ -89,7 +90,8 @@ export const store = reactive({
   ready: false,      // 第一次載入完成前，頁面顯示載入中
   loading: false,
   loadError: '',     // 載入失敗的訊息。空字串 = 沒失敗，畫面要靠它區分「載入失敗」與「真的沒資料」
-  offline: false,
+  // 真的網路狀態（F-32）。以前是「模擬離線」的手動開關，現在跟著瀏覽器的 online / offline 事件走
+  offline: !navigator.onLine,
   pending: [],
   toast: null,
   syncedAt: now(),
@@ -269,9 +271,10 @@ export function imageBroken(url) {
 const TRANSIENT = /issued at future|jwt|expired|fetch|network|timeout|50[234]/i
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-export async function refresh({ retries = 3 } = {}) {
+// quiet：背景更新用（回到線上時），不把整頁換成「載入中」，失敗也不跳錯 —— 畫面上已經有資料了
+export async function refresh({ retries = 3, quiet = false } = {}) {
   if (!store.me) return
-  store.loading = true
+  if (!quiet) store.loading = true
   store.loadError = ''
   try {
     for (let attempt = 0; ; attempt++) {
@@ -279,6 +282,7 @@ export async function refresh({ retries = 3 } = {}) {
         Object.assign(store, await api.loadAll())
         await attachImageUrls()
         store.syncedAt = now()
+        warmMediaCache()
         return
       } catch (err) {
         if (attempt >= retries || !TRANSIENT.test(err.message ?? '')) throw err
@@ -286,6 +290,11 @@ export async function refresh({ retries = 3 } = {}) {
       }
     }
   } catch (err) {
+    if (quiet) return
+    // 是網路的問題（剛好斷網、訊號太差）而且手機裡有上次的快照：先拿快照頂著，當成離線。
+    // 權限、資料錯誤不走這條，那種要讓使用者看到錯誤，不能用舊資料蓋過去
+    const network = !navigator.onLine || /fetch|network|timeout/i.test(err.message ?? '')
+    if (network && await restoreSnapshot()) { store.offline = true; return }
     // 留給畫面判斷：載入失敗和「真的沒有資料」不一樣，不能都顯示空狀態
     store.loadError = err.message || '載入資料失敗'
     toast(store.loadError)
@@ -302,8 +311,54 @@ export async function bootstrap() {
   // 沒設定環境變數時不要炸掉整個 app，讓畫面正常走到登入頁再講
   if (!isConfigured) { store.ready = true; return }
   try { store.me = await currentUserId() } catch { store.me = null }
-  if (store.me) await refresh()
-  else store.ready = true
+  // 斷網時 Supabase 換不了過期的 token，拿不到登入狀態。手機裡有上次的快照就照它的人開，
+  // 不要把人踢回登入頁 —— 在國外沒網路時登入頁是死路。回到線上會再跟伺服器確認一次。
+  if (!store.me && store.offline) store.me = (await getSnapshot(SNAPSHOT))?.me ?? null
+  if (!store.me) { store.ready = true; return }
+  if (store.offline && await restoreSnapshot()) { store.ready = true; return }
+  await refresh()
+}
+
+// ---- 離線（F-32 / F-33 / F-45）
+// 整份資料存一份快照在手機（IndexedDB），斷網打開時拿出來顯示。快照只有一份、屬於最後登入的人，
+// 登出就刪掉，換人登入不會看到上一個人的東西。離線期間的勾選（pending）也在快照裡，重開 app 不會掉。
+const SNAPSHOT = 'snapshot'
+const DATA_KEYS = Object.keys(empty())
+async function restoreSnapshot() {
+  const snap = await getSnapshot(SNAPSHOT)
+  if (!snap || snap.me !== store.me) return false
+  Object.assign(store, snap.data, { pending: snap.pending ?? [], syncedAt: snap.syncedAt })
+  return true
+}
+let saveTimer
+watch(() => [store.me, store.ready, store.loading, store.pending, ...DATA_KEYS.map(k => store[k])], () => {
+  if (!store.me || !store.ready || store.loading || store.loadError) return
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    // 先轉成純 JSON：IndexedDB 存不了 Vue 的 reactive Proxy（DataCloneError）
+    const data = JSON.parse(JSON.stringify(Object.fromEntries(DATA_KEYS.map(k => [k, store[k]]))))
+    setSnapshot(SNAPSHOT, { me: store.me, data, pending: JSON.parse(JSON.stringify(store.pending)), syncedAt: store.syncedAt })
+  }, 800)
+}, { deep: true })
+
+addEventListener('offline', () => { store.offline = true })
+addEventListener('online', () => { store.offline = false })
+
+// 照片的縮圖和機票、訂房的 PDF 先抓一輪，讓 service worker 存起來（public/sw.js），
+// 斷網時才看得到。原圖不抓（一張一兩百 KB，全部抓太重），看過的原圖 service worker 一樣會留。
+// 只抓還沒結束的旅程。沒有 service worker（開發模式、不支援的瀏覽器）就不抓，抓了也存不起來。
+async function warmMediaCache() {
+  if (!navigator.serviceWorker?.controller) return
+  const live = new Set(myTrips().filter(t => !tripPast(t)).map(t => t.id))
+  const urls = [
+    ...[...store.items, ...store.entries].filter(x => live.has(x.tripId)).flatMap(x => (x.images ?? []).map(thumbOf)),
+    ...store.days.filter(d => live.has(d.tripId)).flatMap(d => (d.links ?? []).flatMap(l => (l.images ?? []).map(thumbOf))),
+    ...store.entries.filter(e => live.has(e.tripId)).flatMap(e => (e.files ?? []).map(f => f.url)),
+  ].filter(Boolean)
+  // 一次四個，不要一口氣丟幾百個請求把頻寬塞爆
+  for (let i = 0; i < urls.length; i += 4) {
+    await Promise.all(urls.slice(i, i + 4).map(u => fetch(u).catch(() => {})))
+  }
 }
 
 export async function signUp(username, password, displayName) {
@@ -325,6 +380,7 @@ export async function signIn(username, password) {
 
 export async function logout() {
   await authSignOut()
+  delSnapshot(SNAPSHOT)
   store.me = null
   store.ready = true
   store.loadError = ''
@@ -409,12 +465,22 @@ export async function uploadEntryFile(tripId, file) {
 }
 // 簽名網址只有一小時，app 開著放久了會過期，所以點的當下再簽一次。
 // 先同步開一個空分頁再把網址填進去：等簽名回來才 window.open 的話，iOS Safari 會當成彈窗擋掉
+//
+// 不直接開 Supabase 的網址，而是 fetch 回來轉成 blob 再開：新分頁開別的網域不會經過我們的
+// service worker，斷網時就打不開。fetch 會經過它，離線時拿得到預先存好的那份（F-45）。
 export async function openFile(f) {
   const w = window.open('', '_blank')
-  const signed = await api.signPaths([f.path])
-  const url = signed.get(f.path) || f.url
-  if (w) w.location = url
-  else location.href = url
+  let url = f.url
+  if (!store.offline) url = (await api.signPaths([f.path]).catch(() => new Map())).get(f.path) || url
+  try {
+    const blob = await (await fetch(url)).blob()
+    const local = URL.createObjectURL(blob)
+    if (w) w.location = local
+    else location.href = local
+  } catch {
+    w?.close()
+    toast(store.offline ? '這個檔案還沒存到手機上，連上網路後再開一次' : '打不開這個檔案')
+  }
 }
 
 // F-14 / F-28：連結預覽圖與貼上的圖片網址都要轉存成自己的副本，
@@ -652,7 +718,10 @@ export function setStatus(it, patch) {
 // 回到線上：把離線期間累積的狀態切換依序送出。
 // 佇列裡兩種東西：清單項目的購買/已去過，以及行程項目的完成。
 watch(() => store.offline, async off => {
-  if (off || !store.pending.length) { if (!off) store.syncedAt = now(); return }
+  if (off) return
+  // 斷網時開的 app 可能是拿快照撐著、沒有真的登入狀態，回到線上要先跟伺服器確認
+  if (!(await currentUserId().catch(() => null))) return
+  if (!store.pending.length) { refresh({ quiet: true }); return }
   const queue = store.pending.slice()
   store.pending = []
   let failed = 0
@@ -663,8 +732,7 @@ watch(() => store.offline, async off => {
     } catch { failed++ }
   }
   toast(failed ? `同步完成，${failed} 筆失敗（項目可能已被刪除）` : `已同步 ${queue.length} 筆變更`)
-  store.syncedAt = now()
-  if (failed) refresh()
+  refresh({ quiet: true })
 })
 
 // ---- invites & members
