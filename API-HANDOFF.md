@@ -26,7 +26,7 @@
 - 唯一自寫的伺服器端程式是 [`api/preview.js`](api/preview.js)，跑在 Vercel Functions，負責連結預覽與圖片轉存。
 - 登入是**帳號密碼**，不收 email。
 - 一個專案有兩種東西：**清單**（每人一個分頁，他人的唯讀）與**行程**（全隊共用一份，按日期排）。v2.0 起沒有共同分頁。
-- 尚未完成的只有離線與 PWA（PRD F-31 到 F-34、F-45）。
+- 尚未完成的只有 F-34 衝突處理（誰後寫誰贏）。離線與 PWA 已在 v2.11 上線。
 
 ---
 
@@ -122,6 +122,8 @@ psql -f supabase/rls-test.sql
 
 它會先補上 Supabase 專有的 auth / storage 替身再載入 schema，所以要跑在**用完就丟的本機 Postgres**，不要對正式資料庫執行。改動 schema 後請重跑。
 
+**離線（v2.11）不影響權限設計**：離線時只讀 IndexedDB 裡的快照，不會打 PostgREST；回到線上送出佇列時，是一般的已登入請求。所以 RLS 與 GRANT 都不需要為離線做任何調整，加新表時也不用多想這一層。
+
 ---
 
 ## 4. 只有這個專案才有的坑
@@ -215,11 +217,12 @@ node scripts/check.mjs
 
 | 項目 | 狀態 |
 |---|---|
-| F-31 PWA Service Worker | **未做**。manifest 在 [`public/manifest.webmanifest`](public/manifest.webmanifest)，SW 完全沒寫 |
-| F-32 離線可讀 | **未做**。沒有 IndexedDB 也沒有 Cache Storage |
-| F-33 離線可寫 | **半套**。`store.offline` 還是 Trip 頁選單裡的手動開關，`store.pending` 只存在記憶體，重整就消失。真實版要改用 `navigator.onLine` 加上 `online`/`offline` 事件，佇列落地 IndexedDB。佇列已經能裝兩種東西（清單項目的狀態、行程項目的完成），用 `kind` 區分 |
-| F-45 行程離線 | **未做**，依賴上面三條，照使用者決定整批往後 |
-| F-34 衝突處理 | 未做。目前誰後寫誰贏，但沒有比對 `updated_at` |
+| F-31 PWA Service Worker | **已做**（v2.11.0）。[`public/sw.js`](public/sw.js) 手寫，沒裝 workbox，只在正式版註冊（[`src/main.js`](src/main.js) 的 `import.meta.env.PROD`）。三條規則：頁面請求網路優先、斷網回快取的 index.html（存在 `'/'` 底下）；自家靜態檔快取優先（`/assets/*` 檔名帶 hash）；Supabase storage 的照片與 PDF 網路優先、斷網拿快取，快取 key 是**去掉簽名 query** 的網址，並改用 cors 重抓避免 opaque 回應灌爆配額。快取名 `onway-shell-v1` / `onway-media-v1` —— **這兩個名字在 sw.js 和 [`src/store.js`](src/store.js) 各寫了一份，改一邊一定要改另一邊**。`/sw.js` 由 [`vercel.json`](vercel.json) 送 `Cache-Control: no-cache` |
+| F-32 離線可讀 | **已做**（v2.11.0）。整份 store（含 `pending`）存一份快照在 IndexedDB（[`src/offline-cache.js`](src/offline-cache.js)，db `onway` / store `kv` / key `snapshot`），登出時刪掉。兩種時機會改讀快照：斷網啟動，或載入時遇到**網路類**錯誤 —— 權限類錯誤不走這條（判斷在 `store.js` 的 `!navigator.onLine \|\| /fetch\|network\|timeout/`），否則會把「沒權限」誤當成「離線」而顯示過期資料。斷網拿不到登入狀態時照快照裡的使用者開，回到線上再確認 |
+| F-33 離線可寫 | **已做，但只限勾選**（v2.11.0）。`store.offline` 改跟瀏覽器的 `online`/`offline` 事件走，手動「模擬離線」開關已拿掉。`pending` 跟著快照落地 IndexedDB，重開 app 不會掉；回到線上依序送出再做一次 quiet refresh（背景更新，不切到載入中畫面）。其他編輯在離線時照舊擋掉 |
+| F-45 行程離線 | **已做**（v2.11.0），靠上面三項。另外連網載入後會預抓「還沒結束的旅程」的縮圖與 `itinerary_entries.files`（PDF）讓 SW 存起來；原圖只有看過的才會存。PDF 是 fetch 成 blob 再開，這樣離線也會經過 SW 而打得開 |
+| 離線快取清理 | **已做**（v2.11.1）。連網載入後會刪掉 media 快取裡用不到的照片與 PDF（已刪除的項目、已結束的旅程），也會清掉 shell 快取裡舊版的 `/assets/*` |
+| F-34 衝突處理 | **未做**。目前誰後寫誰贏，沒有比對 `updated_at` |
 | 刪除項目時清掉 bucket 檔案 | **已做**。四條路徑都掃：刪項目、編輯時移掉圖片、離開表單時丟掉沒存的圖、換或清掉專案封面。判斷在 [`src/image-rules.js`](src/image-rules.js)：只刪沒有任何項目或專案封面還在引用的 path，F-12 的複製品共用同一個 path 所以擋在這裡。刪檔一律在資料列存好之後才做，反過來會在寫入失敗回捲後留下破圖 |
 | 既有孤兒檔 | **已做**，但要手動跑：`npm run sweep` 預演、`npm run sweep -- --delete` 真的刪（[`scripts/sweep-orphans.mjs`](scripts/sweep-orphans.mjs)）。需要 service role 金鑰，只在本機跑。24 小時內上傳的檔案一律跳過，避免跟正開著表單的人搶。沒有排程，清理上線後孤兒檔不會再累積，這支是掃歷史殘留的 |
 
