@@ -12,6 +12,7 @@ import ItemDetail from './pages/ItemDetail.vue'
 import Members from './pages/Members.vue'
 import Regions from './pages/Regions.vue'
 import Tags from './pages/Tags.vue'
+import TripPrint from './pages/TripPrint.vue'
 import Invite from './pages/Invite.vue'
 import Profile from './pages/Profile.vue'
 
@@ -30,6 +31,7 @@ export const router = createRouter({
     { path: '/trips/:tripId/members', component: Members },              // P-07
     { path: '/trips/:tripId/regions', component: Regions },              // P-08
     { path: '/trips/:tripId/tags', component: Tags },                    // P-09
+    { path: '/trips/:tripId/print', component: TripPrint },              // 匯出 PDF（列印版行程）
     { path: '/invite/:token', component: Invite },                       // P-10
   ],
   // 換頁從最上面開始。vue-router 預設完全不碰捲軸，所以清單捲到一半按新增，

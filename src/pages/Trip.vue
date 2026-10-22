@@ -446,6 +446,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
       <RouterLink :to="`/trips/${tripId}/members`" class="row">成員與邀請</RouterLink>
       <RouterLink :to="`/trips/${tripId}/regions`" class="row">地區</RouterLink>
       <RouterLink :to="`/trips/${tripId}/tags`" class="row">標籤</RouterLink>
+      <RouterLink :to="`/trips/${tripId}/print`" class="row">匯出 PDF</RouterLink>
       <label class="row mt-1 border-t border-line pt-1"><span class="flex-1 text-muted">模擬離線（原型用）</span><input v-model="store.offline" type="checkbox" class="size-5 accent-accent" /></label>
     </Sheet>
 

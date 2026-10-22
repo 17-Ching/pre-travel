@@ -328,3 +328,21 @@ html:has(dialog.zoom[open]) { overflow: hidden; }
    用 pointer: coarse 而不是螢幕寬度：判斷依據是「有沒有精準的指標裝置」，
    視窗縮小的筆電還是該有箭頭，平板放大還是不該有。 */
 @media (pointer: coarse) { .zoom-arrow { display: none; } }
+
+/* 匯出 PDF（TripPrint.vue）。白底黑字是寫在元件裡的，這裡只管紙張與分頁：
+   - size A4 portrait：鎖直式。不寫的話瀏覽器會沿用上次的版面設定，可能是橫式。
+   - color-scheme 強制 light：深色主題下 :root 是 color-scheme: dark，
+     紙張邊界（頁首頁尾那一圈）會被畫成黑的，實際存出來的 PDF 就是一圈黑框。
+   - 不開 print-color-adjust: exact：讓瀏覽器照預設省掉背景色，app 的深色底不會被印出來。
+     縮圖是 <img> 不是背景，照樣會印。
+   - 工具列不印、頁面動畫關掉（不然印出來可能是淡入一半的樣子）、
+     同一個時段／備註不要被切在兩頁中間。 */
+@media print {
+  @page { size: A4 portrait; margin: 12mm; }
+  :root, :root[data-theme] { color-scheme: light !important; background: #fff !important; }
+  body { background: #fff !important; }
+  .no-print { display: none !important; }
+  .print-doc { max-width: none; padding: 0; }
+  .avoid-break { break-inside: avoid; }
+  main, .print-doc { animation: none !important; }
+}
