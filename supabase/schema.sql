@@ -277,6 +277,9 @@ create table if not exists public.expenses (
   currency          text not null check (currency ~ '^[A-Z]{3}$'),
   date              date not null,
   note              text not null default '' check (char_length(note) <= 500),
+  -- v2.12.0：分類統計用。固定這六個值不給自訂，既有的帳吃 default 'other'
+  category          text not null default 'other'
+                    check (category in ('food', 'transport', 'stay', 'shopping', 'fun', 'other')),
   -- 共同帳：誰先墊的
   payer_id          uuid references public.profiles on delete set null,
   -- 個人帳：這是誰的帳
@@ -314,6 +317,12 @@ create index if not exists itinerary_day_idx     on public.itinerary_entries (tr
 -- 反查「這個地點排在哪幾天」，F-41 的重複提示與 F-47 的刪除確認都要用
 create index if not exists itinerary_item_idx    on public.itinerary_entries (item_id);
 -- 記帳頁一次撈一個專案的兩種帳；分攤則是反查「這個人欠哪幾筆」
+-- 記帳分類（v2.12.0）。既有資料庫要補欄位，create table if not exists 不會改既有的表
+alter table public.expenses add column if not exists category text not null default 'other';
+alter table public.expenses drop constraint if exists expenses_category_check;
+alter table public.expenses add constraint expenses_category_check
+  check (category in ('food', 'transport', 'stay', 'shopping', 'fun', 'other'));
+
 create index if not exists expenses_trip_idx     on public.expenses (trip_id, kind, date);
 create index if not exists expenses_owner_idx    on public.expenses (trip_id, owner_user_id);
 create index if not exists expense_shares_user_idx on public.expense_shares (user_id);
@@ -793,12 +802,15 @@ begin
     raise exception 'share_user_not_member';
   end if;
 
+  -- category 一定要跟著 insert 與 update 一起寫（v2.12.0）。少寫的話共同帳的類別
+  -- 會永遠停在 default 'other'，而且不會報錯 —— 畫面看起來正常，統計卻永遠是錯的。
   insert into public.expenses
-    (id, trip_id, kind, title, amount, currency, date, note, payer_id, created_by)
+    (id, trip_id, kind, title, amount, currency, date, note, category, payer_id, created_by)
   values (
     v_id, v_trip, 'group',
     p_expense ->> 'title', v_amount, p_expense ->> 'currency',
     (p_expense ->> 'date')::date, coalesce(p_expense ->> 'note', ''),
+    coalesce(p_expense ->> 'category', 'other'),
     v_payer, auth.uid())
   on conflict (id) do update set
     title    = excluded.title,
@@ -806,6 +818,7 @@ begin
     currency = excluded.currency,
     date     = excluded.date,
     note     = excluded.note,
+    category = excluded.category,
     payer_id = excluded.payer_id;
     -- updated_at / updated_by 由 expenses_touch 觸發器蓋，不靠呼叫端填
 

@@ -1,9 +1,10 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { PhPlus, PhArrowRight, PhCheck, PhPencilSimple, PhTrash, PhArrowBendDownLeft } from '@phosphor-icons/vue'
+import { PhPlus, PhArrowRight, PhCheck, PhPencilSimple, PhTrash, PhArrowBendDownLeft,
+  PhForkKnife, PhTrain, PhBed, PhShoppingBag, PhTicket, PhPackage, PhCaretRight } from '@phosphor-icons/vue'
 import { store, prefs, user, me, tripMembers, tripCurrencies, todayISO, toast,
   groupExpenses, myExpenses, addedToMine, saveExpense, deleteExpense, addShareToMine, toggleSettled, settlePair,
-  splitEven, debts, totals, fmtMoney, decimalsOf } from '../store'
+  splitEven, debts, totals, fmtMoney, decimalsOf, CATEGORIES, categoryOf, byCategory } from '../store'
 import { WEEK, parseDate } from '../date-rules'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
@@ -16,6 +17,15 @@ const isGroup = computed(() => p.ledger === 'group')
 const list = computed(() => (isGroup.value ? groupExpenses(props.tripId) : myExpenses(props.tripId)))
 // 共同帳的總額是整筆，我的記帳是我自己記的金額（加進來的分攤就是我那份）
 const sums = computed(() => totals(list.value))
+// 分類統計跟著現在看的那一邊（共同／我的），幣別分開列
+const stats = computed(() => byCategory(list.value))
+const statsOpened = ref(0)
+// 類別圖示：跟全 app 同一套線條圖示（Phosphor），不用 emoji —— emoji 每支手機長得不一樣
+const CATEGORY_ICON = { food: PhForkKnife, transport: PhTrain, stay: PhBed, shopping: PhShoppingBag, fun: PhTicket, other: PhPackage }
+// 每個類別固定一個顏色，借用標籤那 8 色（style.css 的 .tag-0…7，深淺色已經調好）。
+// 固定對應不用雜湊：類別只有六個，挑彼此差最多的六色，統計圖上相鄰的長條才分得開
+const CATEGORY_HUE = { food: 0, transport: 5, stay: 6, shopping: 7, fun: 1, other: 3 }
+const catColor = k => `tag tag-${CATEGORY_HUE[k] ?? 3}`
 const owed = computed(() => debts(groupExpenses(props.tripId)))
 const byDate = computed(() => {
   const m = new Map()
@@ -58,7 +68,7 @@ function openNew() {
   if (!online()) return
   const currency = tripCurrencies(props.tripId)[0]
   form.value = {
-    kind: isGroup.value ? 'group' : 'personal', title: '', amount: '', currency, date: todayISO(), note: '',
+    kind: isGroup.value ? 'group' : 'personal', title: '', amount: '', currency, date: todayISO(), note: '', category: 'food',
     payerId: store.me, mode: 'even', who: [...people.value], custom: {}, origShares: [],
   }
 }
@@ -68,7 +78,7 @@ function edit(e) {
   const who = e.shares.map(s => s.userId)
   const even = splitEven(e.amount, who, e.payerId, e.currency)
   form.value = {
-    id: e.id, kind: e.kind, title: e.title, amount: String(e.amount), currency: e.currency, date: e.date, note: e.note,
+    id: e.id, kind: e.kind, title: e.title, amount: String(e.amount), currency: e.currency, date: e.date, note: e.note, category: e.category,
     payerId: e.payerId, sourceExpenseId: e.sourceExpenseId,
     // 存的時候是均分算出來的就回到均分，不然打開編輯會莫名變成自訂
     mode: e.shares.every((s, i) => s.amount === even[i]) ? 'even' : 'custom',
@@ -117,7 +127,7 @@ function save() {
   const prev = new Map(f.origShares.map(s => [s.userId, s.settled]))
   saveExpense({
     id: f.id, tripId: props.tripId, kind: f.kind, title: f.title.trim(), amount: amount.value, currency: f.currency,
-    date: f.date, note: f.note.trim(),
+    date: f.date, note: f.note.trim(), category: f.category,
     payerId: f.kind === 'group' ? f.payerId : null,
     ownerUserId: f.kind === 'personal' ? store.me : null,
     sourceExpenseId: f.sourceExpenseId ?? null,
@@ -153,6 +163,34 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
     </p>
     <p v-if="!isGroup" class="mt-1 text-[12px] text-muted">只有你自己看得到</p>
 
+    <!-- 分類統計：各類別花了多少，長條是佔這個幣別總額的比例。預設收著，不把帳目往下推 -->
+    <!-- 展開的動畫（高度、淡入、長條長出來）在 style.css 的 .cat-stats -->
+    <details v-if="list.length" class="cat-stats card mt-3 p-3" @toggle="e => e.target.open && statsOpened++">
+      <summary class="flex cursor-pointer list-none items-center gap-1.5 text-[13px] font-semibold tracking-wide text-muted">
+        <PhCaretRight :size="12" weight="bold" class="cat-caret shrink-0 text-tint" />分類統計
+      </summary>
+      <!-- 每次打開都換 key 重畫一次：收起來時內容是 content-visibility: hidden，瀏覽器不更新它的樣式，
+           再打開時動畫不會重播。換成新的元素，長條就會重新長一次 -->
+      <div :key="statsOpened">
+      <div v-for="g in stats" :key="g.currency" class="mt-2.5">
+        <p v-if="stats.length > 1" class="mb-1 text-[12px] font-semibold text-muted">{{ g.currency }}・共 {{ fmtMoney(g.total, g.currency) }}</p>
+        <ul class="grid gap-2">
+          <li v-for="r in g.rows" :key="r.category">
+            <div class="flex items-baseline gap-2 text-[14px]">
+              <component :is="CATEGORY_ICON[r.category]" :size="16" :class="['shrink-0 self-center', `tag-${CATEGORY_HUE[r.category]}`]" style="color: var(--tag-c)" />
+              <span class="flex-1">{{ categoryOf(r.category)[1] }}</span>
+              <span class="text-[12px] tabular-nums text-muted">{{ Math.round(r.ratio * 100) }}%</span>
+              <span class="w-24 text-right font-semibold tabular-nums">{{ fmtMoney(r.amount, g.currency) }}</span>
+            </div>
+            <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2">
+              <div :class="['cat-bar h-full rounded-full', `tag-${CATEGORY_HUE[r.category]}`]" :style="{ width: `${r.ratio * 100}%`, background: 'var(--tag-c)' }" />
+            </div>
+          </li>
+        </ul>
+      </div>
+      </div>
+    </details>
+
     <!-- 結算：兩兩抵銷後還欠多少。按「結清」把兩人之間的分攤全部勾成已付清 -->
     <section v-if="isGroup && list.length" class="card mt-3 p-3">
       <h3 class="text-[13px] font-semibold tracking-wide text-muted">結算</h3>
@@ -182,7 +220,11 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
           <button class="card flex w-full items-center gap-3 p-3 text-left transition duration-150 active:scale-[0.99]" @click="open(e)">
             <Avatar v-if="e.kind === 'group'" :user="user(e.payerId)" :size="32" />
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-[15px] font-semibold">{{ e.title }}</span>
+              <!-- 類別是標題後面的小標籤，跟願望清單卡片上的地區標籤同一個樣式 -->
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span class="truncate text-[15px] font-semibold">{{ e.title }}</span>
+                <span :class="['inline-flex h-[20px] shrink-0 items-center rounded-md px-1.5 text-[11px] font-medium', catColor(categoryOf(e.category)[0])]">{{ categoryOf(e.category)[1] }}</span>
+              </span>
               <span class="mt-0.5 block truncate text-[12px] text-muted">
                 <template v-if="e.kind === 'group'">
                   {{ nameOf(e.payerId) }} 付・{{ e.shares.length }} 人分<template v-if="owingCount(e)">・已付清 {{ settledCount(e) }}/{{ owingCount(e) }}</template>
@@ -235,6 +277,14 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
       <div>
         <label class="label" for="x-title">項目</label>
         <input id="x-title" v-model="form.title" class="input" maxlength="100" placeholder="例：一蘭拉麵、Suica 儲值" />
+      </div>
+      <div>
+        <span class="label">類別</span>
+        <div class="flex flex-wrap gap-2">
+          <button v-for="[k, l] in CATEGORIES" :key="k" :class="['chip-tag', catColor(k), form.category === k && 'on']" @click="form.category = k">
+            <component :is="CATEGORY_ICON[k]" :size="15" />{{ l }}
+          </button>
+        </div>
       </div>
       <div>
         <label class="label" for="x-amount">金額</label>

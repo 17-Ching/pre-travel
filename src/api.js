@@ -90,7 +90,7 @@ const entryRow = e => ({
 const toExpense = r => ({
   id: r.id, tripId: r.trip_id, kind: r.kind, title: r.title, amount: Number(r.amount), currency: r.currency,
   date: r.date, note: r.note ?? '', payerId: r.payer_id, ownerUserId: r.owner_user_id,
-  sourceExpenseId: r.source_expense_id, shares: [],
+  sourceExpenseId: r.source_expense_id, category: r.category ?? 'other', shares: [],
   createdBy: r.created_by, updatedBy: r.updated_by, createdAt: r.created_at, updatedAt: r.updated_at,
 })
 const toShare = r => ({ userId: r.user_id, amount: Number(r.amount), settled: r.settled })
@@ -100,6 +100,7 @@ const expenseRow = e => ({
   payer_id: e.kind === 'group' ? e.payerId : null,
   owner_user_id: e.kind === 'personal' ? e.ownerUserId : null,
   source_expense_id: e.sourceExpenseId ?? null,
+  category: e.category ?? 'other',
 })
 
 const toDay = r => ({ tripId: r.trip_id, date: r.date, note: r.note ?? '', links: r.links ?? [], refIds: r.ref_ids ?? [], updatedBy: r.updated_by, updatedAt: r.updated_at })

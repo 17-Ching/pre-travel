@@ -329,6 +329,31 @@ html:has(dialog.zoom[open]) { overflow: hidden; }
    視窗縮小的筆電還是該有箭頭，平板放大還是不該有。 */
 @media (pointer: coarse) { .zoom-arrow { display: none; } }
 
+/* 記帳的「分類統計」展開（Ledger.vue）。原生 <details>，不用 JS：
+   - 高度：::details-content 搭 interpolate-size，Chrome 131+ / Safari 18.4+ 會滑開；
+     不支援的瀏覽器直接展開，不會壞。
+   - 內容淡入、長條從 0 長到自己的寬度：@keyframes 只寫 from，終點就是元素原本的樣式，
+     所以每條長條不用另外算寬度，所有瀏覽器都有。
+   - 箭頭轉 90 度，跟願望清單分組的收合箭頭同一個動作。 */
+.cat-stats { interpolate-size: allow-keywords; }
+.cat-stats summary::-webkit-details-marker { display: none; }
+.cat-stats::details-content {
+  height: 0;
+  overflow: clip;
+  transition: height 260ms cubic-bezier(0.33, 1, 0.68, 1), content-visibility 260ms allow-discrete;
+}
+.cat-stats[open]::details-content { height: auto; }
+.cat-stats .cat-caret { transition: rotate 200ms cubic-bezier(0.33, 1, 0.68, 1); }
+.cat-stats[open] .cat-caret { rotate: 90deg; }
+.cat-stats[open] summary ~ * { animation: cat-in 240ms cubic-bezier(0.33, 1, 0.68, 1) 40ms backwards; }
+.cat-stats[open] .cat-bar { animation: cat-bar 520ms cubic-bezier(0.22, 1, 0.36, 1) 80ms backwards; }
+@keyframes cat-in { from { opacity: 0; translate: 0 -4px; } }
+@keyframes cat-bar { from { width: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .cat-stats::details-content, .cat-stats .cat-caret { transition: none; }
+  .cat-stats[open] summary ~ *, .cat-stats[open] .cat-bar { animation: none; }
+}
+
 /* 匯出 PDF（TripPrint.vue）。白底黑字是寫在元件裡的，這裡只管紙張與分頁：
    - size A4 portrait：鎖直式。不寫的話瀏覽器會沿用上次的版面設定，可能是橫式。
    - color-scheme 強制 light：深色主題下 :root 是 color-scheme: dark，

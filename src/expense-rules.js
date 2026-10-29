@@ -52,6 +52,33 @@ export function totals(list) {
   return [...m].map(([c, n]) => [c, roundMoney(n, c)])
 }
 
+// 記帳類別。固定一組，不給自訂：旅行花費就這幾類，自訂的話每個人取名不一樣，統計就對不起來。
+// 第一個值存進資料庫（expenses.category），改名只改後面的字，不要改 key。
+// 圖示在 Ledger.vue（這支不碰 Vue，check.mjs 才能直接 import）。
+export const CATEGORIES = [
+  ['food', '餐飲'], ['transport', '交通'], ['stay', '住宿'],
+  ['shopping', '購物'], ['fun', '門票娛樂'], ['other', '其他'],
+]
+export const categoryOf = key => CATEGORIES.find(([k]) => k === key) ?? CATEGORIES.at(-1)
+
+// 各類別花了多少。幣別分開算（不做匯率換算），同一個幣別裡照金額大到小排，
+// 回傳 [{ currency, total, rows: [{ category, amount, ratio }] }]，ratio 給長條圖用
+export function byCategory(list) {
+  const m = new Map()
+  for (const { currency, amount, category } of list) {
+    const c = m.get(currency) ?? new Map()
+    const k = categoryOf(category)[0]
+    c.set(k, (c.get(k) ?? 0) + amount)
+    m.set(currency, c)
+  }
+  return [...m].map(([currency, c]) => {
+    const total = roundMoney([...c.values()].reduce((s, n) => s + n, 0), currency)
+    const rows = [...c].map(([category, n]) => ({ category, amount: roundMoney(n, currency), ratio: total ? n / total : 0 }))
+      .sort((a, b) => b.amount - a.amount)
+    return { currency, total, rows }
+  })
+}
+
 // 台幣在 zh-TW 會被印成「$」，跟美金分不出來，改回大家習慣的 NT$
 export function fmtMoney(n, currency) {
   const d = decimalsOf(currency)

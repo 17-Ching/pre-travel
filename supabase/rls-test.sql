@@ -503,7 +503,7 @@ select save_group_expense(
   jsonb_build_object(
     'id', '77777777-0000-0000-0000-000000000001', 'trip_id', :'trip_id', 'kind', 'group',
     'title', '晚餐 居酒屋', 'amount', 3000, 'currency', 'JPY', 'date', '2026-11-13',
-    'note', '', 'payer_id', :'ruby'),
+    'note', '', 'category', 'food', 'payer_id', :'ruby'),
   jsonb_build_array(
     jsonb_build_object('user_id', :'ruby', 'amount', 1500, 'settled', false),
     jsonb_build_object('user_id', :'jean', 'amount', 1500, 'settled', false)));
@@ -511,6 +511,17 @@ do $$ begin
   perform ok((select count(*) from expenses where kind = 'group') = 1, '成員可以新增共同帳');
   perform ok((select count(*) from expense_shares) = 2, '分攤跟著帳目一起寫進去');
 end $$;
+
+-- v2.12.0 分類：共同帳是走 RPC 存的，所以要驗 RPC 真的有把 category 寫進去。
+-- 這條沒守住的話失敗是沉默的 —— 類別永遠停在 'other'，畫面正常、統計全錯。
+do $$ begin
+  perform ok((select category from expenses where kind = 'group') = 'food',
+    'save_group_expense 有寫入 category');
+end $$;
+select denied(
+  format('insert into expenses (trip_id, kind, title, amount, currency, date, category, owner_user_id, created_by) values (%L, %L, %L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', 'personal', '亂填類別', 100, 'JPY', '2026-11-13', 'xxx', :'ruby', :'ruby'),
+  '不是那六個值的 category 會被擋');
 
 -- 加總對不起來要擋：差一塊錢就是有人的份沒算到，存進去要等分帳才會發現
 select denied(
@@ -534,12 +545,16 @@ select save_group_expense(
   jsonb_build_object(
     'id', '77777777-0000-0000-0000-000000000001', 'trip_id', :'trip_id', 'kind', 'group',
     'title', '晚餐 居酒屋', 'amount', 3000, 'currency', 'JPY', 'date', '2026-11-13',
-    'note', '改成自己請', 'payer_id', :'ruby'),
+    'note', '改成自己請', 'category', 'transport', 'payer_id', :'ruby'),
   jsonb_build_array(jsonb_build_object('user_id', :'ruby', 'amount', 3000, 'settled', false)));
 do $$ begin
   perform ok((select count(*) from expense_shares
               where expense_id = '77777777-0000-0000-0000-000000000001') = 1,
     '編輯時從名單拿掉的人，分攤會被刪掉');
+  -- upsert 的 update 分支也要改 category，不是只有 insert 寫得對就算過
+  perform ok((select category from expenses
+              where id = '77777777-0000-0000-0000-000000000001') = 'transport',
+    '編輯共同帳時 category 會跟著改');
 end $$;
 
 -- 個人帳：Ruby 建一筆，而且是從上面那筆共同帳複製進來的

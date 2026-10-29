@@ -114,7 +114,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 94 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 97 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -129,6 +129,11 @@ psql -f supabase/rls-test.sql
 ## 4. 只有這個專案才有的坑
 
 這些規則藏在 SQL 或設定裡，只看前端看不到，最容易被下一個人重複實作或踩到。
+
+**幫 `expenses` 加欄位時，`save_group_expense` 要一起改**
+共同帳不是前端直接寫表，是走 [`save_group_expense`](supabase/schema.sql) RPC 存的。那支 RPC 的 upsert 是**逐欄列舉**，新欄位沒加進去的話，共同帳那一欄會永遠停在預設值 —— **而且不會報任何錯**。個人帳是前端直接 insert/update，所以會正常寫入，於是變成「同一個欄位，個人帳對、共同帳錯」，畫面看起來都正常，只有統計是錯的。v2.12.0 加 `category` 時就是這個狀況。
+
+`on conflict do update` 那一段也要加，不是只有 insert —— 新增時寫對、編輯時改不動，一樣難查。rls-test 兩邊都有斷言守著。
 
 **新建資料表一定要自己附 GRANT**
 2026-10-30 起 Supabase 不再自動把 `public` schema 的新表授權給 Data API 角色。這不只影響重建環境 —— **在正式庫跑的建表 migration 一樣會中**，前端拿到 `42501 permission denied for table ...`（錯誤訊息會直接附上該下的 GRANT）。既有的表不受影響，不用補跑。
@@ -290,7 +295,10 @@ supabase/
   migrate-entry-files.sql  itinerary_entries 加 files（v2.9.0），航班與住宿可以附
                         PDF。含 files_only_on_flight_stay 約束，並把 media bucket
                         的 allowed_mime_types 清成 null。可重複執行
-  rls-test.sql        權限驗證，94 項。跑在用完就丟的本機 Postgres
+  migrate-expense-category.sql  expenses 加 category（v2.12.0，六個固定值）。
+                        同一支一起換掉 save_group_expense，不然共同帳的類別會
+                        永遠停在 other 而且不報錯。可重複執行
+  rls-test.sql        權限驗證，97 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

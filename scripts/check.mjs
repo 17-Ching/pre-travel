@@ -6,7 +6,7 @@ import { isBlocked, meta, decode, toText } from '../api/preview.js'
 import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from '../src/auth-rules.js'
 import { addDays, daysBetween, coversDate, stayNights, stayDayLabel, tripPast } from '../src/date-rules.js'
 import { imagePaths, unusedPaths } from '../src/image-rules.js'
-import { splitEven, debts, totals, fmtMoney } from '../src/expense-rules.js'
+import { splitEven, debts, totals, fmtMoney, byCategory, categoryOf } from '../src/expense-rules.js'
 import { readFileSync } from 'node:fs'
 import { CHANGELOG } from '../src/changelog.js'
 
@@ -182,6 +182,15 @@ assert.deepEqual(debts([ex('a', 'JPY', [['b', 500, true]])]), [], '已付清的�
 assert.deepEqual(debts([ex('a', 'JPY', [['b', 500]]), ex('b', 'TWD', [['a', 100]])]).length, 2, '不同幣別不能互抵')
 assert.deepEqual(totals([{ currency: 'USD', amount: 0.1 }, { currency: 'USD', amount: 0.2 }]), [['USD', 0.3]], '浮點誤差要收掉')
 assert.equal(fmtMoney(1200, 'TWD'), 'NT$1,200')
+// 類別統計：幣別分開、金額大到小、沒有類別（舊資料）算其他
+const cat = byCategory([
+  { currency: 'JPY', amount: 1000, category: 'food' }, { currency: 'JPY', amount: 3000, category: 'transport' },
+  { currency: 'JPY', amount: 500, category: 'food' }, { currency: 'TWD', amount: 200, category: undefined },
+])
+assert.deepEqual(cat.map(c => [c.currency, c.total]), [['JPY', 4500], ['TWD', 200]], '幣別不能混在一起加')
+assert.deepEqual(cat[0].rows.map(r => [r.category, r.amount]), [['transport', 3000], ['food', 1500]], '同類別要合併、照金額排')
+assert.equal(cat[1].rows[0].category, 'other', '沒有類別的舊帳算「其他」')
+assert.equal(categoryOf('不存在')[0], 'other')
 assert.equal(fmtMoney(3200, 'JPY'), '¥3,200')
 
 // ── 版本號與更新紀錄。畫面上的版本號吃 package.json，點開看到的是 changelog，

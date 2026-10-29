@@ -1063,7 +1063,7 @@ export function setDayNote(tripId, date, { note, links, refIds }) {
 // ---- 記帳 ----
 // 共同帳全員可新增修改；個人帳只有自己看得到（RLS 擋，別人的根本不會載進來）。
 // 分攤掛在共同帳底下的 shares，付款人自己那份一律算已付清。
-export { splitEven, debts, totals, fmtMoney, decimalsOf } from './expense-rules'
+export { splitEven, debts, totals, fmtMoney, decimalsOf, CATEGORIES, categoryOf, byCategory } from './expense-rules'
 export const groupExpenses = tripId => store.expenses
   .filter(e => e.tripId === tripId && e.kind === 'group')
   .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
@@ -1120,7 +1120,7 @@ export function addShareToMine(e) {
   if (!mine || addedToMine(e.id)) return null
   return saveExpense({
     tripId: e.tripId, kind: 'personal', ownerUserId: store.me, sourceExpenseId: e.id,
-    title: e.title, amount: mine.amount, currency: e.currency, date: e.date, note: '',
+    title: e.title, amount: mine.amount, currency: e.currency, date: e.date, note: '', category: e.category,
   })
 }
 
