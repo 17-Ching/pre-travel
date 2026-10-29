@@ -148,7 +148,9 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
 
 <template>
   <div class="gutter pb-2 pt-2">
-    <div class="relative grid grid-cols-2 rounded-[12px] bg-surface-2 p-1">
+    <!-- isolate：按鈕的 z-10 只是要疊在滑塊上面，關在這個容器裡比。這條切換列不在 sticky 標題區裡，
+         沒有隔開的話 z-10 會跟頁面的標題列同一層，往上捲時「共同／我的」的字就浮到標題列上面 -->
+    <div class="relative isolate grid grid-cols-2 rounded-[12px] bg-surface-2 p-1">
       <div class="absolute inset-y-1 left-1 w-[calc((100%-0.5rem)/2)] rounded-[9px] bg-card shadow-e1 transition-transform duration-200 ease-out"
         :style="{ transform: `translateX(${isGroup ? 0 : 100}%)` }" aria-hidden="true" />
       <button :class="segCls(isGroup)" @click="p.ledger = 'group'">共同</button>
