@@ -114,7 +114,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 112 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 116 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -166,6 +166,11 @@ PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_sel
 
 **自由輸入的行程項目與被斷開引用的行程項目，資料形狀一模一樣**
 兩種都是 `item_id` 為 null、`title` 有值，前端分不出來。靠 `detached_at` 區分，由 F-47 的觸發器在斷開時寫入。不要改回用「沒有 itemId 又有 title」判斷，那會把每一筆使用者自己打的項目都標成「原項目已刪除」。
+
+**行程上「空的代表讀清單的」那些欄位，F-47 斷開時要留快照**
+`itinerary_entries` 的 `title`、`hours`、`closed_day` 都是這個規則：空的就讀 `items` 的值，有值就是這一列自己覆寫。清單項目被刪掉時，空的那些會瞬間失去來源，所以 [`detach_itinerary_on_item_delete`](supabase/schema.sql) 要把被刪項目的值填進去。**再加這類欄位時要一起改這支觸發器**，漏掉的話是標題留著、那一欄默默消失，不報錯。v2.13.2 加 `hours` 時就差點漏掉。
+
+這跟上面 `save_group_expense` 是同一種坑：**凡是逐欄列舉的 SQL（RPC 的 upsert、觸發器的 set），加欄位都要回去補，而且失敗是沉默的。** 改 `items` 或 `itinerary_entries` 的欄位前先 grep 一下那個欄位名在 `schema.sql` 出現幾次。
 
 **D1 的「影響 0 筆」是預期結果，不是失敗**
 勾完成時只同步自己的地點的 `visited`，引用他人的就是 0 筆。這跟本專案其他地方「0 筆等於被 RLS 拒絕」的判讀相反，不要在那裡加 `must()`。
@@ -303,7 +308,13 @@ supabase/
                         （公休日）。合成一支，因為 hours 漏跑的話前端每次存檔都會
                         整筆失敗，分兩支就有半套的空間。pinned_at 用 timestamptz
                         不是 boolean，時間本身就是排序依據。RLS 不動。可重複執行
-  rls-test.sql        權限驗證，112 項。跑在用完就丟的本機 Postgres
+  migrate-v2-13-2.sql  拿掉 quoted_entry_has_no_hours（v2.13.2），讓引用別人清單
+                        的行程能自己填營業時間蓋過清單的值 —— 別人的清單你改不動，
+                        覆寫只能存在行程那一列。同一支一起換掉
+                        detach_itinerary_on_item_delete：hours 現在跟 title 一樣是
+                        「空的＝讀清單的」，清單項目被刪時沒留快照就會默默消失。
+                        images / region_id 的兩條約束沒有跟著拿掉。可重複執行
+  rls-test.sql        權限驗證，116 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

@@ -476,17 +476,32 @@ do $$ begin
   perform ok((select closed_day from itinerary_entries where title = '自己打的夜景點') = 'wed',
     '自己打的地點可以選公休日');
 end $$;
--- 約束有兩半，兩半都要驗：只擋 hours 的話，公休日還是會各存一份
+-- v2.13.2：引用別人清單的地點，可以自己填營業時間蓋過清單的值。
+-- 別人的清單項目改不動（items_update 限本人），所以覆寫只能存在行程這一列。
+-- 這裡引用的是 Jean 的項目，Ruby 改不了 Jean 的清單。
+insert into itinerary_entries (trip_id, date, section, slot, item_id, hours, closed_day, created_by)
+values (:'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
+        '[{"open":"09:00","close":"17:00"}]'::jsonb, 'thu', :'ruby');
+do $$ begin
+  perform ok((select jsonb_array_length(hours) from itinerary_entries
+              where item_id is not null and hours <> '[]'::jsonb) = 1,
+    '引用別人清單的行程可以自己填營業時間（v2.13.2 覆寫）');
+  perform ok((select closed_day from itinerary_entries
+              where item_id is not null and closed_day is not null) = 'thu',
+    '引用別人清單的行程可以自己選公休日');
+  -- 釘住「覆寫不會回寫到清單」：Ruby 改不動 Jean 的 items，
+  -- 所以 Jean 那筆的營業時間必須原封不動
+  perform ok((select hours from items where id = (
+               select item_id from itinerary_entries where closed_day = 'thu')) = '[]'::jsonb,
+    '覆寫只存在行程那一列，不會回寫到別人的清單');
+end $$;
+-- images 與 region_id 沒有跟著放行，它們仍然只能由清單那邊決定
 select denied(
-  format('insert into itinerary_entries (trip_id, date, section, slot, item_id, hours, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
+  format('insert into itinerary_entries (trip_id, date, section, slot, item_id, images, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
          :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
-         '[{"open":"10:00","close":"18:00"}]', :'ruby'),
-  '引用清單的行程項目不能自己填營業時間');
-select denied(
-  format('insert into itinerary_entries (trip_id, date, section, slot, item_id, closed_day, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
-         :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
-         'wed', :'ruby'),
-  '引用清單的行程項目不能自己選公休日');
+         '[{"path":"t/c.jpg"}]', :'ruby'),
+  '放行營業時間不等於放行照片，引用的照片仍然跟著清單走');
+delete from itinerary_entries where closed_day = 'thu';
 
 -- v2.9.0：航班與住宿可以附 PDF，其他 kind 不行。
 -- 這段同時驗了「加欄位不需要補 grant」—— 是以 authenticated 的身分寫入新欄位，
@@ -526,6 +541,13 @@ end $$;
 
 -- F-47：刪掉被引用的地點，行程項目要保留並留下標題
 set app.uid = '11111111-1111-1111-1111-111111111111';
+-- v2.13.2：營業時間也要留快照。這一列刻意只覆寫公休日、營業時間留空，
+-- 好讓兩個分支在同一筆資料上都被走到：
+--   hours      空的 → 要填入被刪項目的值（不然標題留著、營業時間默默消失）
+--   closed_day 有值 → 是這一列自己的覆寫，不能被被刪項目的值蓋掉
+update items set hours = '[{"open":"11:00","close":"23:00"}]'::jsonb, closed_day = 'tue'
+where id = :'jean_item';
+update itinerary_entries set closed_day = 'sat' where id = :'ref_entry';
 delete from items where id = :'jean_item';
 do $$ begin
   perform ok((select count(*) from itinerary_entries) = 3, 'F-47：刪地點不連鎖刪行程項目');
@@ -543,6 +565,12 @@ do $$ begin
     'F-47：自由輸入的項目不會被誤標成已斷開');
   perform ok((select detached_at from itinerary_entries where title = '新宿 → 鎌倉') is null,
     'F-47：交通項目也不會被誤標');
+  -- v2.13.2：沒有這兩條的話，斷開後標題留著、營業時間默默不見，而且不會報錯
+  perform ok((select hours from itinerary_entries where title = '一蘭 新宿')
+             = '[{"open":"11:00","close":"23:00"}]'::jsonb,
+    'F-47：沿用清單的營業時間在斷開時有留下快照');
+  perform ok((select closed_day from itinerary_entries where title = '一蘭 新宿') = 'sat',
+    'F-47：這一列自己覆寫的公休日不會被被刪項目的值蓋掉');
 end $$;
 
 -- 非成員完全碰不到行程

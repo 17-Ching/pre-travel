@@ -174,6 +174,9 @@ create table if not exists public.itinerary_entries (
   -- （item_id 都是 null、title 都有值），沒有這個記號前端分不出來，
   -- 每一筆自由輸入的項目都會被誤標成「原項目已刪除」。
   detached_at    timestamptz,
+  -- 引用列的 title 平常是空的（畫面讀 items.title）。有值＝這一列自己取的標題，
+  -- 蓋過清單的，道理同下面的 hours。F-47 斷開時這個值會被留下來當快照，
+  -- 空的才填入被刪項目的標題 —— 見 detach_itinerary_on_item_delete。
   title          text not null default '' check (char_length(title) <= 100),
   -- 從清單加進來的地點，備註與連結是複製一份而不是引用：
   -- 當天要改成「今天只買這個」不該回頭改到清單本身（標題與照片仍跟著原項目走）
@@ -189,8 +192,12 @@ create table if not exists public.itinerary_entries (
   -- v2.9.0：航班與住宿可以附 PDF（電子機票、訂房確認信），格式 [{ path, name, size }]。
   -- 跟圖片放同一個 media bucket，路徑是 `${trip_id}/<uuid>.pdf`。
   files          jsonb not null default '[]'::jsonb,
-  -- v2.13.0：營業時間與公休日，格式同 items（見那邊的註解）。只有自己打的地點
-  -- 會填，引用清單的那種讀 items 的值（Q10），見下方 quoted_entry_has_no_hours。
+  -- v2.13.0：營業時間與公休日，格式同 items（見那邊的註解）。
+  -- v2.13.2：自己打的地點會填；引用清單的地點想蓋過清單的值時也會填。
+  -- 空的（hours = []、closed_day = null）就讀 items 的值，所以對方改清單這邊會
+  -- 跟著變；有值就是這一列自己說了算。前端引用自己的清單時是寫回 items、
+  -- 這一列留空，只有引用別人的清單才會寫在這裡 —— 但那是前端的選擇，
+  -- 資料庫不分這兩種情況。
   hours          jsonb not null default '[]'::jsonb,
   closed_day     text check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none')),
   -- v2.5.0：自己打的地點也能選地區。on delete set null 跟 items.region_id 一樣，
@@ -230,12 +237,13 @@ create table if not exists public.itinerary_entries (
   constraint quoted_entry_has_no_region check (item_id is null or region_id is null),
   -- v2.9.0：只有航班與住宿會附 PDF。其他 kind 掛檔案沒有地方顯示，
   -- 刪掉的時候也不會有人想到要清，就變成孤兒檔
-  constraint files_only_on_flight_stay check (kind in ('flight', 'stay') or files = '[]'::jsonb),
-  -- v2.13.0：同 images 與 region_id，引用清單的那種營業時間跟著清單項目走
-  -- （畫面讀 items 的值）。自己再存一份就會有兩個可能互相矛盾的營業時間。
-  -- 兩個欄位都要管：只擋 hours 的話，公休日還是會各存一份。
-  constraint quoted_entry_has_no_hours
-    check (item_id is null or (hours = '[]'::jsonb and closed_day is null))
+  constraint files_only_on_flight_stay check (kind in ('flight', 'stay') or files = '[]'::jsonb)
+  -- v2.13.2 拿掉了 quoted_entry_has_no_hours（原本：引用列的 hours 必須是 []、
+  -- closed_day 必須是 null）。當時的理由是「兩邊都存會互相矛盾」，而那時候引用列的
+  -- 值只可能是清單的副本，所以成立。現在它不是副本而是**覆寫**：別人的清單項目
+  -- 你改不動（items_update 限本人），想在自己的行程裡改營業時間就只能存在這一列。
+  -- 空的＝沿用清單的值，對方改清單這邊會跟著變；有值＝這一列自己說了算。
+  -- 上面 images 與 region_id 的兩條沒有跟著放行，它們仍然只能由清單那邊決定。
 );
 
 -- TripDay：備註、連結、引用的參考三個都空才不留資料列（PRD §4.1 的 F-43）。
@@ -299,9 +307,9 @@ alter table public.itinerary_entries add column if not exists closed_day text;
 alter table public.itinerary_entries drop constraint if exists itinerary_entries_closed_day_check;
 alter table public.itinerary_entries add constraint itinerary_entries_closed_day_check
   check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none'));
+-- v2.13.2：拿掉 quoted_entry_has_no_hours（理由見建表那段的註解）。
+-- 既有資料庫跑過舊版 schema 的要把它刪掉，不然引用別人清單的地點存營業時間會被擋。
 alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_hours;
-alter table public.itinerary_entries add constraint quoted_entry_has_no_hours
-  check (item_id is null or (hours = '[]'::jsonb and closed_day is null));
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 
@@ -455,8 +463,14 @@ returns trigger language plpgsql security definer set search_path = public as $$
 begin
   update public.itinerary_entries
      set item_id = null,
-         -- 引用中的 entry 標題本來是空的，填入被刪項目的標題當快照
+         -- 引用中的 entry 標題本來是空的，填入被刪項目的標題當快照。
+         -- 有值的話是這一列自己取的標題，留著（v2.13.2）。
          title   = case when btrim(title) <> '' then title else old.title end,
+         -- v2.13.2：營業時間跟 title 同一個道理 —— 空的代表「讀清單的」，
+         -- 清單沒了就什麼都不剩，所以斷開時要留下快照。有值的是這一列自己的覆寫，
+         -- 不能蓋掉。沒有這兩行的話，標題留著、營業時間卻默默消失。
+         hours      = case when hours <> '[]'::jsonb then hours else old.hours end,
+         closed_day = coalesce(closed_day, old.closed_day),
          -- 沒有這個記號的話，「使用者自己打的」和「引用被刪掉的」分不出來，
          -- 每一筆自由輸入的項目都會被誤標成「原項目已刪除」
          detached_at = now(),
