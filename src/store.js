@@ -714,15 +714,18 @@ export function deleteItem(id) {
   // F-47：資料庫的觸發器會把引用它的行程項目斷開並留下標題快照。
   // 這裡做同一件事，畫面才不用等重新整理就正確。
   const refs = store.entries.filter(e => e.itemId === id)
-  const snapshot = refs.map(e => ({ e, itemId: e.itemId, title: e.title, detachedAt: e.detachedAt }))
+  // 營業時間同理：行程自己覆寫過的留著，沿用清單的就把清單的值留下來（觸發器也是這樣做）
+  const snapshot = refs.map(e => ({ e, before: { itemId: e.itemId, title: e.title, detachedAt: e.detachedAt, hours: e.hours, closedDay: e.closedDay } }))
   refs.forEach(e => {
     e.itemId = null
     e.title = e.title?.trim() || removed.title
     e.detachedAt = now()
+    if (!e.hours?.length) e.hours = JSON.parse(JSON.stringify(removed.hours ?? []))
+    e.closedDay ??= removed.closedDay ?? null
   })
   push(() => api.deleteItem(id).then(() => sweepImages(imagePaths(removed.images))), () => {
     store.items.splice(i, 0, removed)
-    snapshot.forEach(s => Object.assign(s.e, { itemId: s.itemId, title: s.title, detachedAt: s.detachedAt }))
+    snapshot.forEach(s => Object.assign(s.e, s.before))
   })
 }
 
@@ -748,12 +751,15 @@ export function togglePin(it) {
 }
 
 // F-19 / F-36 / F-33: optimistic status toggle, queued while offline.
+// 行程裡改引用地點的營業時間也走這條（寫回清單項目），patch 帶 hours / closedDay
 export function setStatus(it, patch) {
-  const before = { visited: it.visited, status: it.status }
+  const before = Object.fromEntries(Object.keys(patch).map(k => [k, it[k]]))
   Object.assign(it, patch, { updatedAt: now(), updatedBy: store.me })
   if (store.offline) {
-    store.pending = store.pending.filter(p => !(p.kind === 'item' && p.id === it.id))
-      .concat({ kind: 'item', id: it.id, ...patch })
+    // 同一個項目離線時改了好幾樣（先勾去過、再改營業時間），合成一筆，不能後蓋前
+    const prev = store.pending.find(p => p.kind === 'item' && p.id === it.id)
+    store.pending = store.pending.filter(p => p !== prev)
+      .concat({ ...prev, kind: 'item', id: it.id, ...patch })
     return
   }
   push(() => api.patchItem(it.id, patch), () => Object.assign(it, before))
@@ -895,7 +901,8 @@ export const dayRefs = (tripId, date) =>
 
 // 引用的是活的資料（Q10）：被引用項目改標題或換照片，行程跟著變。
 // F-47 斷開引用後 title 變成快照，這兩支負責把判斷收在一個地方。
-export const entryTitle = e => (e.itemId ? item(e.itemId)?.title || e.title : e.title)
+// 引用別人清單的那筆可以在行程裡自己取標題（title 平常是空的），有填就蓋過清單的
+export const entryTitle = e => (e.itemId ? e.title?.trim() || item(e.itemId)?.title || '' : e.title)
 // 自己打的地點用自己的圖；引用清單的照片跟著清單走
 export const entryImages = e => (e.images?.length ? e.images : (e.itemId && item(e.itemId)?.images) || [])
 export const entryThumb = e => thumbOf(entryImages(e)[0])
@@ -944,7 +951,9 @@ export function addEntry(data) {
 // 營業時間（顯示用的一行字，空字串＝整列不顯示）。
 // 行程：自己打的地點用自己的，引用清單的跟著清單項目走（Q10，跟照片、地區一樣）
 export const itemHours = it => (it ? fmtHours(it.hours, it.closedDay) : '')
-export const entryHours = e => itemHours(e.itemId ? item(e.itemId) : e)
+// 引用別人清單的那筆可以自己填營業時間，有填就蓋過清單的
+export const hasOwnHours = e => Boolean(e.hours?.length || e.closedDay)
+export const entryHours = e => itemHours(e.itemId && !hasOwnHours(e) ? item(e.itemId) : e)
 
 export const entryFromItem = (it, { tripId, date, section, slot }) => ({
   tripId, date, section, slot, kind: 'place', itemId: it.id, title: '',

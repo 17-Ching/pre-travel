@@ -334,6 +334,8 @@ export async function patchItem(id, patch) {
   if ('visited' in patch) row.visited = patch.visited
   if ('status' in patch) row.purchase_status = patch.status
   if ('pinnedAt' in patch) row.pinned_at = patch.pinnedAt
+  if ('hours' in patch) row.hours = cleanHours(patch.hours)
+  if ('closedDay' in patch) row.closed_day = patch.closedDay ?? null
   const rows = must(await sb().from('items').update(row).eq('id', id).select(), '更新狀態')
   return toItem(rows[0])
 }

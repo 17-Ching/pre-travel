@@ -5,7 +5,7 @@ import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPen
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
   dayNote, dayLinks, dayRefs, setDayNote, addEntry, addEntries, updateEntry,
   toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
-  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, entryHours, linkify, openFile } from '../store'
+  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, entryHours, hasOwnHours, linkify, openFile, setStatus } from '../store'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
@@ -136,14 +136,24 @@ function openEdit(entry) {
   const arrowAt = isRouteKind ? entry.title.indexOf('→') : -1
   const from = !isRouteKind ? '' : arrowAt < 0 ? entry.title.trim() : entry.title.slice(0, arrowAt).trim()
   const to = arrowAt < 0 ? '' : entry.title.slice(arrowAt + 1).trim()
-  form.value = { title: entry.itemId ? '' : entry.title, kind: entry.kind, transportMode: entry.transportMode || '',
+  form.value = { title: entryTitle(entry), kind: entry.kind, transportMode: entry.transportMode || '',
     startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
     links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])],
-    images: JSON.parse(JSON.stringify(entry.images ?? [])), files: JSON.parse(JSON.stringify(entry.files ?? [])), regionId: entry.regionId ?? '', hours: JSON.parse(JSON.stringify(entry.hours ?? [])), closedDay: entry.closedDay ?? null,
+    images: JSON.parse(JSON.stringify(entry.images ?? [])), files: JSON.parse(JSON.stringify(entry.files ?? [])), regionId: entry.regionId ?? '',
+    // 引用清單的那筆，行程自己沒填營業時間就先帶清單的進來
+    ...hoursOf(entry.itemId && !hasOwnHours(entry) ? findItem(entry.itemId) : entry),
     startDate: entry.date, endDate: entry.endDate || '', from, to }
   formFor.value = { entry }
 }
+const hoursOf = x => ({ hours: JSON.parse(JSON.stringify(x?.hours ?? [])), closedDay: x?.closedDay ?? null })
 const editingRef = computed(() => Boolean(formFor.value?.entry?.itemId)) // 引用的項目標題不可改（F-38）
+// 引用自己清單的地點：營業時間是店家本身的事，同一間店只留一份，在這裡改是寫回清單項目。
+// 別人清單的項目不能改（items_update 的 RLS），所以標題、營業時間存在行程這一筆，蓋過清單的值；
+// 跟清單一樣就存空的，對方之後改了清單這邊才會跟著變
+const refItem = computed(() => editingRef.value ? findItem(formFor.value.entry.itemId) : null)
+const refHoursMine = computed(() => refItem.value?.type === 'place' && refItem.value.ownerUserId === store.me)
+const refOthers = computed(() => refItem.value?.type === 'place' && !refHoursMine.value)
+const sameHours = (a, b) => JSON.stringify(hoursOf(a)) === JSON.stringify(hoursOf(b))
 // 地區只有自己打的地點有。引用清單的照片、地區跟著清單走（Q10）。
 // 圖片：自己打的地點，加上航班與住宿（登機證截圖、飯店外觀）；航班與住宿另外可以放 PDF。交通都沒有
 const hasRegion = computed(() => form.value.kind === 'place' && !editingRef.value)
@@ -205,6 +215,12 @@ function submitForm() {
     files: hasFiles.value ? f.files : [],
     // 住宿是唯一自己帶日期區間的：編輯時連入住日一起改，不走「搬到其他天」
     ...(isStay.value ? { date: stayStart.value, endDate: f.endDate } : {}),
+  }
+  const hours = { hours: cleanHours(f.hours), closedDay: f.closedDay }
+  if (refHoursMine.value && !sameHours(hours, refItem.value)) setStatus(refItem.value, hours)
+  if (refOthers.value) {
+    Object.assign(patch, sameHours(hours, refItem.value) ? { hours: [], closedDay: null } : hours)
+    patch.title = composedTitle.value === refItem.value.title ? '' : composedTitle.value
   }
   if (ctx.entry) updateEntry(ctx.entry, editingRef.value ? patch : { ...patch, title: composedTitle.value })
   else {
@@ -603,14 +619,19 @@ const addFor = ref(null)
               :placeholder="isFlight ? '到（例：成田）' : '到（例：鎌倉）'" aria-label="抵達地" />
           </div>
         </div>
-        <div v-else-if="!editingRef">
-          <label class="label" for="e-title">{{ isStay ? '住宿名稱' : '標題' }}</label>
-          <input id="e-title" v-model="form.title" class="input" maxlength="100"
-            :placeholder="isStay ? '例：東橫 INN 新宿' : '要做什麼'" />
-        </div>
-        <p v-else class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
-          這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走；下面的備註與連結只屬於行程這一筆。
+        <p v-else-if="refHoursMine" class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
+          這筆引用你清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走，營業時間改了會一起改到清單；備註與連結只屬於行程這一筆。
         </p>
+        <template v-else>
+          <p v-if="editingRef" class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
+            這筆引用{{ user(refItem?.ownerUserId)?.name ?? '別人' }}清單裡的「{{ refItem?.title }}」，照片跟著清單走；標題、營業時間、備註與連結改了只算行程這一筆，不會動到對方的清單。
+          </p>
+          <div>
+            <label class="label" for="e-title">{{ isStay ? '住宿名稱' : '標題' }}</label>
+            <input id="e-title" v-model="form.title" class="input" maxlength="100"
+              :placeholder="editingRef ? refItem?.title : isStay ? '例：東橫 INN 新宿' : '要做什麼'" />
+          </div>
+        </template>
 
         <div v-if="hasRegion">
           <label class="label" for="e-region">地區（選填）</label>
@@ -677,8 +698,8 @@ const addFor = ref(null)
         <ImagePicker v-if="formFor && hasImages" ref="picker" :images="form.images" :trip-id="tripId" />
         <FilePicker v-if="formFor && hasFiles" :files="form.files" :trip-id="tripId" />
 
-        <!-- 營業時間只給自己打的地點；引用清單的照清單項目的顯示。放在備註正上方，跟抽屜裡的順序一樣 -->
-        <HoursField v-if="hasRegion" v-model:closed-day="form.closedDay" :hours="form.hours" />
+        <!-- 放在備註正上方，跟抽屜裡的順序一樣。引用自己清單的寫回清單，引用別人的存在行程這一筆 -->
+        <HoursField v-if="hasRegion || refItem?.type === 'place'" v-model:closed-day="form.closedDay" :hours="form.hours" />
 
         <div>
           <label class="label" for="e-note">備註（選填）</label>
