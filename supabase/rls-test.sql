@@ -479,9 +479,10 @@ end $$;
 -- v2.13.2：引用別人清單的地點，可以自己填營業時間蓋過清單的值。
 -- 別人的清單項目改不動（items_update 限本人），所以覆寫只能存在行程這一列。
 -- 這裡引用的是 Jean 的項目，Ruby 改不了 Jean 的清單。
-insert into itinerary_entries (trip_id, date, section, slot, item_id, hours, closed_day, created_by)
+-- v2.14.0 的 station 走同一套規則，所以一起驗。
+insert into itinerary_entries (trip_id, date, section, slot, item_id, hours, closed_day, station, created_by)
 values (:'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
-        '[{"open":"09:00","close":"17:00"}]'::jsonb, 'thu', :'ruby');
+        '[{"open":"09:00","close":"17:00"}]'::jsonb, 'thu', 'JR 新宿站 東口', :'ruby');
 do $$ begin
   perform ok((select jsonb_array_length(hours) from itinerary_entries
               where item_id is not null and hours <> '[]'::jsonb) = 1,
@@ -489,12 +490,20 @@ do $$ begin
   perform ok((select closed_day from itinerary_entries
               where item_id is not null and closed_day is not null) = 'thu',
     '引用別人清單的行程可以自己選公休日');
+  perform ok((select station from itinerary_entries where closed_day = 'thu') = 'JR 新宿站 東口',
+    '引用別人清單的行程可以自己填最近車站（v2.14.0 覆寫）');
   -- 釘住「覆寫不會回寫到清單」：Ruby 改不動 Jean 的 items，
-  -- 所以 Jean 那筆的營業時間必須原封不動
+  -- 所以 Jean 那筆的營業時間與最近車站都必須原封不動
   perform ok((select hours from items where id = (
                select item_id from itinerary_entries where closed_day = 'thu')) = '[]'::jsonb,
     '覆寫只存在行程那一列，不會回寫到別人的清單');
+  perform ok((select station from items where id = (
+               select item_id from itinerary_entries where closed_day = 'thu')) = '',
+    '最近車站的覆寫也不會回寫到別人的清單');
 end $$;
+select denied(
+  format('update items set station = %L where id = %L', '偷改別人的車站', :'jean_item'),
+  'Ruby 不能直接改 Jean 清單項目的最近車站');
 -- images 與 region_id 沒有跟著放行，它們仍然只能由清單那邊決定
 select denied(
   format('insert into itinerary_entries (trip_id, date, section, slot, item_id, images, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
@@ -545,12 +554,21 @@ set app.uid = '11111111-1111-1111-1111-111111111111';
 -- 好讓兩個分支在同一筆資料上都被走到：
 --   hours      空的 → 要填入被刪項目的值（不然標題留著、營業時間默默消失）
 --   closed_day 有值 → 是這一列自己的覆寫，不能被被刪項目的值蓋掉
-update items set hours = '[{"open":"11:00","close":"23:00"}]'::jsonb, closed_day = 'tue'
+-- v2.14.0 的 station 一起驗，它也是「空的＝讀清單的」
+update items set hours = '[{"open":"11:00","close":"23:00"}]'::jsonb, closed_day = 'tue',
+                 station = '東京 Metro 新宿三丁目站'
 where id = :'jean_item';
 update itinerary_entries set closed_day = 'sat' where id = :'ref_entry';
+-- 一列只能走到每個欄位的一個分支，所以再引用一筆專門走覆寫分支：
+-- ref_entry 的 title 與 station 都是空的（驗快照），這一筆兩個都有值（驗不被蓋掉）。
+-- 這一筆的 title 一定要跟被刪項目的不一樣，不然斷開後兩列的 title 會撞在一起，
+-- 上面那些 where title = '一蘭 新宿' 的斷言會變成一次撈到兩列。
+insert into itinerary_entries (trip_id, date, section, slot, item_id, title, station, created_by)
+values (:'trip_id', '2026-11-14', 'schedule', 'morning', :'jean_item',
+        '一蘭 新宿（早場）', '都營 新宿站', :'jean');
 delete from items where id = :'jean_item';
 do $$ begin
-  perform ok((select count(*) from itinerary_entries) = 3, 'F-47：刪地點不連鎖刪行程項目');
+  perform ok((select count(*) from itinerary_entries) = 4, 'F-47：刪地點不連鎖刪行程項目');
   perform ok((select count(*) from itinerary_entries where id = (select id from itinerary_entries where title = '一蘭 新宿')) = 1,
     'F-47：被刪項目的標題有留在行程上');
   perform ok((select item_id from itinerary_entries where title = '一蘭 新宿') is null,
@@ -571,6 +589,14 @@ do $$ begin
     'F-47：沿用清單的營業時間在斷開時有留下快照');
   perform ok((select closed_day from itinerary_entries where title = '一蘭 新宿') = 'sat',
     'F-47：這一列自己覆寫的公休日不會被被刪項目的值蓋掉');
+  -- v2.14.0：最近車站兩個分支各驗一筆
+  perform ok((select station from itinerary_entries where title = '一蘭 新宿')
+             = '東京 Metro 新宿三丁目站',
+    'F-47：沿用清單的最近車站在斷開時有留下快照');
+  perform ok((select station from itinerary_entries where title = '一蘭 新宿（早場）') = '都營 新宿站',
+    'F-47：這一列自己覆寫的最近車站不會被被刪項目的值蓋掉');
+  perform ok((select title from itinerary_entries where title = '一蘭 新宿（早場）') = '一蘭 新宿（早場）',
+    'F-47：這一列自己取的標題不會被被刪項目的標題蓋掉');
 end $$;
 
 -- 非成員完全碰不到行程

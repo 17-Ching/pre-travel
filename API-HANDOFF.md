@@ -114,7 +114,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 116 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 122 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -168,9 +168,17 @@ PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_sel
 兩種都是 `item_id` 為 null、`title` 有值，前端分不出來。靠 `detached_at` 區分，由 F-47 的觸發器在斷開時寫入。不要改回用「沒有 itemId 又有 title」判斷，那會把每一筆使用者自己打的項目都標成「原項目已刪除」。
 
 **行程上「空的代表讀清單的」那些欄位，F-47 斷開時要留快照**
-`itinerary_entries` 的 `title`、`hours`、`closed_day` 都是這個規則：空的就讀 `items` 的值，有值就是這一列自己覆寫。清單項目被刪掉時，空的那些會瞬間失去來源，所以 [`detach_itinerary_on_item_delete`](supabase/schema.sql) 要把被刪項目的值填進去。**再加這類欄位時要一起改這支觸發器**，漏掉的話是標題留著、那一欄默默消失，不報錯。v2.13.2 加 `hours` 時就差點漏掉。
+`itinerary_entries` 的 `title`、`hours`、`closed_day`、`station` 都是這個規則：空的就讀 `items` 的值，有值就是這一列自己覆寫。清單項目被刪掉時，空的那些會瞬間失去來源，所以 [`detach_itinerary_on_item_delete`](supabase/schema.sql) 要把被刪項目的值填進去。**再加這類欄位時要一起改這支觸發器**，漏掉的話是標題留著、那一欄默默消失，不報錯。
 
-這跟上面 `save_group_expense` 是同一種坑：**凡是逐欄列舉的 SQL（RPC 的 upsert、觸發器的 set），加欄位都要回去補，而且失敗是沉默的。** 改 `items` 或 `itinerary_entries` 的欄位前先 grep 一下那個欄位名在 `schema.sql` 出現幾次。
+寫斷言時注意**一列只能走到每個欄位的一個分支**（空的→補快照、有值→保留）。rls-test 用兩筆引用同一個項目的行程各走一邊，而且第二筆一定要有自己的 `title` —— 不然斷開後兩列的標題都會變成被刪項目的標題，`where title = ...` 的斷言會一次撈到兩列。
+
+這跟上面 `save_group_expense` 是同一種坑：**凡是逐欄列舉的 SQL（RPC 的 upsert、觸發器的 set），加欄位都要回去補，而且失敗是沉默的。** 改 `items` 或 `itinerary_entries` 的欄位前，先確認有哪些地方在逐欄列舉：
+
+```bash
+grep -nE "insert into public\.(items|itinerary_entries)|update public\.(items|itinerary_entries)" supabase/schema.sql
+```
+
+目前只有兩處：`detach_itinerary_on_item_delete`（要補）與 `sync_visited_on_done`（只碰 `visited`，不受影響）。「複製到我的清單」是前端自己 insert，不走 RPC。
 
 **D1 的「影響 0 筆」是預期結果，不是失敗**
 勾完成時只同步自己的地點的 `visited`，引用他人的就是 0 筆。這跟本專案其他地方「0 筆等於被 RLS 拒絕」的判讀相反，不要在那裡加 `must()`。
@@ -314,7 +322,11 @@ supabase/
                         detach_itinerary_on_item_delete：hours 現在跟 title 一樣是
                         「空的＝讀清單的」，清單項目被刪時沒留快照就會默默消失。
                         images / region_id 的兩條約束沒有跟著拿掉。可重複執行
-  rls-test.sql        權限驗證，116 項。跑在用完就丟的本機 Postgres
+  migrate-v2-14.sql   items 與 itinerary_entries 加 station（v2.14.0，最近車站，
+                        純文字 50 字）。規則同 v2.13.2 的營業時間：行程那一列空的
+                        ＝讀 items.station，有值＝自己覆寫，引用列也能填。
+                        同一支一起補 detach_itinerary_on_item_delete 的快照。可重複執行
+  rls-test.sql        權限驗證，122 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

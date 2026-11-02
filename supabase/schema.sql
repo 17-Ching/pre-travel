@@ -125,6 +125,10 @@ create table if not exists public.items (
   -- （畫面顯示全年無休），其餘 = 那一天公休。用 null 當「沒選」而不是另一個
   -- 字串，是因為舊資料加欄位後本來就是 null，剛好就是「沒選」。
   closed_day      text check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none')),
+  -- v2.14.0：最近車站，純文字（「JR 新宿站 東口」）。空字串＝沒填。
+  -- 不拆成「路線 / 站名 / 出口」三欄：日本有 JR、地鐵、私鐵交錯，韓國又是另一套，
+  -- 拆了反而填不進去。使用者抄 Google Maps 上看到的那一行就好。
+  station         text not null default '' check (char_length(station) <= 50),
   created_by      uuid not null references public.profiles on delete cascade,
   updated_by      uuid references public.profiles on delete set null,
   created_at      timestamptz not null default now(),
@@ -144,6 +148,8 @@ alter table public.items add column if not exists closed_day text;
 alter table public.items drop constraint if exists items_closed_day_check;
 alter table public.items add constraint items_closed_day_check
   check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none'));
+-- v2.14.0：最近車站。
+alter table public.items add column if not exists station text not null default '' check (char_length(station) <= 50);
 
 create table if not exists public.item_tags (
   item_id uuid not null references public.items on delete cascade,
@@ -200,6 +206,9 @@ create table if not exists public.itinerary_entries (
   -- 資料庫不分這兩種情況。
   hours          jsonb not null default '[]'::jsonb,
   closed_day     text check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none')),
+  -- v2.14.0：最近車站，格式同 items（見那邊的註解）。規則也同 hours：
+  -- 空的＝讀 items.station，有值＝這一列自己覆寫。引用列一樣可以填。
+  station        text not null default '' check (char_length(station) <= 50),
   -- v2.5.0：自己打的地點也能選地區。on delete set null 跟 items.region_id 一樣，
   -- 地區被刪掉只是變成沒有地區，不會連帶刪掉行程那筆
   region_id      uuid references public.regions on delete set null,
@@ -310,6 +319,8 @@ alter table public.itinerary_entries add constraint itinerary_entries_closed_day
 -- v2.13.2：拿掉 quoted_entry_has_no_hours（理由見建表那段的註解）。
 -- 既有資料庫跑過舊版 schema 的要把它刪掉，不然引用別人清單的地點存營業時間會被擋。
 alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_hours;
+-- 行程的最近車站（v2.14.0）。規則同 hours，引用列也能覆寫，所以不加約束
+alter table public.itinerary_entries add column if not exists station text not null default '' check (char_length(station) <= 50);
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 
@@ -471,6 +482,8 @@ begin
          -- 不能蓋掉。沒有這兩行的話，標題留著、營業時間卻默默消失。
          hours      = case when hours <> '[]'::jsonb then hours else old.hours end,
          closed_day = coalesce(closed_day, old.closed_day),
+         -- v2.14.0：最近車站同理
+         station    = case when btrim(station) <> '' then station else old.station end,
          -- 沒有這個記號的話，「使用者自己打的」和「引用被刪掉的」分不出來，
          -- 每一筆自由輸入的項目都會被誤標成「原項目已刪除」
          detached_at = now(),
