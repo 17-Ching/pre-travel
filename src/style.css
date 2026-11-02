@@ -329,6 +329,76 @@ html:has(dialog.zoom[open]) { overflow: hidden; }
    視窗縮小的筆電還是該有箭頭，平板放大還是不該有。 */
 @media (pointer: coarse) { .zoom-arrow { display: none; } }
 
+/* 下拉選單（<select class="input">）。
+   收合時：拿掉瀏覽器自己的箭頭，換成往內縮一點的線條箭頭（原生的箭頭貼在最右邊）。
+   箭頭用 mask 畫：形狀來自 SVG，顏色吃 --muted，深淺色模式自動跟著換。
+   展開的清單：電腦上（滑鼠）而且瀏覽器支援 appearance: base-select（Chrome 135+）時整個換成自己的樣式，
+   不支援的照舊是系統清單，不會壞。手機刻意不換：iOS / Android 原生的滾輪選單比網頁做的好用。 */
+select.input {
+  appearance: none;
+  padding-right: 2.75rem;
+  cursor: pointer;
+  background-size: 16px 16px;
+  background-repeat: no-repeat;
+  background-position: right 0.875rem center;
+}
+/* select 沒有 ::after 可以放箭頭，背景圖又吃不到 CSS 變數，所以淺色、深色各準備一張 SVG（顏色同 --muted） */
+select.input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236b7c74' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); }
+:root[data-theme="dark"] select.input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239fb2ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) select.input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%239fb2ae' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E"); } }
+
+@media (pointer: fine) {
+  @supports (appearance: base-select) {
+    select.input, select.input::picker(select) { appearance: base-select; }
+    /* !important：上面深色模式那條背景箭頭的選擇器比較重，不壓掉的話會出現兩個箭頭 */
+    /* 自訂清單的箭頭（::picker-icon）是排在內容裡的，不是背景圖，所以右邊不用再留 2.75rem 給它，
+       內距改回跟左邊一樣的 0.875rem，箭頭才會貼齊右側、左右對稱 */
+    select.input { background-image: none !important; display: flex; align-items: center; padding-right: 0.875rem; }
+    select.input::picker-icon {
+      content: '';
+      width: 16px; height: 16px;
+      margin-inline-start: auto;
+      background-color: var(--muted);
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236b7c74' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E") center / contain no-repeat;
+      transition: rotate 180ms cubic-bezier(0.33, 1, 0.68, 1);
+    }
+    select.input:open::picker-icon { rotate: 180deg; }
+    select.input::picker(select) {
+      margin-top: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--card);
+      color: var(--ink);
+      box-shadow: var(--elev-2);
+    }
+    select.input option { padding: 8px 12px; border-radius: 10px; font-size: 15px; cursor: pointer; }
+    select.input option:hover, select.input option:focus-visible { background: var(--surface-2); outline: none; }
+    /* 選中那列：琥珀色淡底＋原本的字色。不用 --accent-fg（深字），深色模式下會跟底色糊在一起 */
+    select.input option:checked { color: var(--ink); background: color-mix(in oklab, var(--accent) 24%, var(--card)); font-weight: 600; }
+    select.input option::checkmark { display: none; }
+  }
+}
+
+/* 電腦上的日期欄：整條都可以點開日曆（點擊在 main.js 呼叫 showPicker），游標也要看得出來 */
+@media (pointer: fine) { input[type="date"].input { cursor: pointer; } }
+
+/* 電腦版捲軸：細細一條圓角，底色透明，滑過才變深。手機本來就是會自己消失的細條，不動。
+   Chrome / Safari 走 ::-webkit-scrollbar（才做得出圓角和內縮）；不能同時設 scrollbar-color，
+   Chrome 看到標準屬性就會整個忽略這組。Firefox 不認這組，只能用標準屬性給細＋顏色。 */
+@media (pointer: fine) {
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent; border-radius: 999px; background-clip: padding-box;
+    background-color: color-mix(in oklab, var(--muted) 40%, transparent);
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in oklab, var(--muted) 70%, transparent); }
+  @supports not selector(::-webkit-scrollbar) {
+    * { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--muted) 45%, transparent) transparent; }
+  }
+}
+
 /* 記帳的「分類統計」展開（Ledger.vue）。原生 <details>，不用 JS：
    - 高度：::details-content 搭 interpolate-size，Chrome 131+ / Safari 18.4+ 會滑開；
      不支援的瀏覽器直接展開，不會壞。

@@ -100,8 +100,11 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
         <button v-for="g in tags" :key="g.id" @click="toggleTag(g.id)"
           :class="['h-7 rounded-full border px-2.5 text-[13px] font-medium transition', f.tagIds.includes(g.id) ? tagColor(g.name) + ' border-transparent' : 'border-line bg-card text-muted']">{{ g.name }}</button>
       </div>
-      <input id="tag" v-model="tagInput" class="input" maxlength="20" :placeholder="KIND[type].tag ?? '輸入新標籤，按 Enter 建立'" @keydown.enter.prevent="tagInput.trim() && addTag()" />
-      <button v-if="tagInput.trim() && !tagExists" class="mt-2 text-[13px] font-medium text-accent" @click="addTag">建立「{{ tagInput.trim() }}」</button>
+      <!-- 手機上按 Enter 不順手（有些輸入法 Enter 是選字），所以旁邊多一顆「新增」 -->
+      <div class="flex gap-2">
+        <input id="tag" v-model="tagInput" class="input min-w-0 flex-1" maxlength="20" :placeholder="KIND[type].tag ?? '輸入標籤名稱'" @keydown.enter.prevent="tagInput.trim() && addTag()" />
+        <button class="btn-ghost shrink-0 px-4" :disabled="!tagInput.trim()" @click="addTag">{{ tagExists ? '加上' : '新增' }}</button>
+      </div>
     </div>
 
     <!-- 營業時間：手動輸入。Google Maps / Naver 的網址抓不到（Google 要付費 API、Naver 沒有公開 API） -->

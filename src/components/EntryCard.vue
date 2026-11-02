@@ -123,11 +123,12 @@ const timeLabel = computed(() => {
             <Avatar :user="u" :size="14" />{{ u.name }}
           </span>
         </span>
-        <span v-if="entry.note" class="mt-1 line-clamp-2 whitespace-pre-line text-[12px] leading-relaxed text-muted">{{ entry.note }}</span>
-        <!-- F-47：引用的地點被刪掉了，標題留成快照 -->
+        <!-- 營業時間放在備註上面，跟抽屜、表單同一個順序 -->
         <span v-if="!isTransport && entryHours(entry)" class="mt-1 flex items-center gap-1 text-[11px] text-muted">
           <PhClock :size="12" class="shrink-0" /><span class="truncate">{{ entryHours(entry) }}</span>
         </span>
+        <span v-if="entry.note" class="mt-1 line-clamp-2 whitespace-pre-line text-[12px] leading-relaxed text-muted">{{ entry.note }}</span>
+        <!-- F-47：引用的地點被刪掉了，標題留成快照 -->
         <span v-if="detached" class="mt-1 block text-[11px] text-muted">原項目已刪除</span>
       </span>
     </button>

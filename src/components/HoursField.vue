@@ -1,6 +1,7 @@
 <script setup>
 import { PhX, PhPlus } from '@phosphor-icons/vue'
 import { MAX_RANGES, CLOSED_DAYS } from '../hours-rules'
+import TimeField from './TimeField.vue'
 
 // 營業時間欄：好幾段「開始–結束」＋公休日下拉。清單表單與行程表單共用。
 // hours 陣列由呼叫端擁有，這裡直接改它；公休日是單一值，用 v-model:closed-day 傳回去。
@@ -15,9 +16,9 @@ const add = () => { if (props.hours.length < MAX_RANGES) props.hours.push({ open
     <span class="label">營業時間（選填）</span>
     <!-- 手機上一列要塞兩格時間、一個連字號、一顆刪除鈕，輸入框的內距縮小，不然「下午 05:00」會被切掉 -->
     <div v-for="(r, i) in hours" :key="i" class="mb-2 flex items-center gap-1.5">
-      <input v-model="r.open" type="time" class="input min-w-0 flex-1 px-2 text-[15px]" :aria-label="`第 ${i + 1} 段開始`" />
+      <TimeField v-model="r.open" class="flex-1" input-class="min-w-0 px-2 text-[15px]" :aria-label="`第 ${i + 1} 段開始`" />
       <span class="shrink-0 text-muted" aria-hidden="true">–</span>
-      <input v-model="r.close" type="time" class="input min-w-0 flex-1 px-2 text-[15px]" :aria-label="`第 ${i + 1} 段結束`" />
+      <TimeField v-model="r.close" class="flex-1" input-class="min-w-0 px-2 text-[15px]" :aria-label="`第 ${i + 1} 段結束`" />
       <button class="icon-btn size-7 shrink-0 text-muted" :aria-label="`移除第 ${i + 1} 段`" @click="hours.splice(i, 1)"><PhX :size="16" /></button>
     </div>
     <!-- 中午休息的餐廳要兩段以上，所以時段可以一直加 -->

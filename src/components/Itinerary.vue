@@ -12,6 +12,7 @@ import Sheet from './Sheet.vue'
 import ImagePicker from './ImagePicker.vue'
 import FilePicker from './FilePicker.vue'
 import HoursField from './HoursField.vue'
+import TimeField from './TimeField.vue'
 import { cleanHours } from '../hours-rules'
 import ImageZoom from './ImageZoom.vue'
 import LinkFields from './LinkFields.vue'
@@ -611,8 +612,6 @@ const addFor = ref(null)
           這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走；下面的備註與連結只屬於行程這一筆。
         </p>
 
-        <!-- 營業時間只給自己打的地點；引用清單的照清單項目的顯示 -->
-        <HoursField v-if="hasRegion" v-model:closed-day="form.closedDay" :hours="form.hours" />
         <div v-if="hasRegion">
           <label class="label" for="e-region">地區（選填）</label>
           <select id="e-region" class="input" :value="form.regionId" @change="onRegion">
@@ -662,11 +661,11 @@ const addFor = ref(null)
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="label" for="e-start">{{ isFlight ? '起飛時間（選填）' : isStay ? '入住時間（選填）' : '開始時間（選填）' }}</label>
-            <input id="e-start" v-model="form.startTime" type="time" class="input" />
+            <TimeField id="e-start" v-model="form.startTime" />
           </div>
           <div>
             <label class="label" for="e-end">{{ isFlight ? '抵達時間（選填）' : isStay ? '退房時間（選填）' : '結束時間（選填）' }}</label>
-            <input id="e-end" v-model="form.endTime" type="time" class="input" />
+            <TimeField id="e-end" v-model="form.endTime" />
           </div>
         </div>
         <p v-if="badTimes" class="-mt-1 text-[12px] text-danger">結束時間不能早於開始時間</p>
@@ -677,6 +676,9 @@ const addFor = ref(null)
         <!-- formFor 也要擋：抽屜關掉時拆掉它們，才會清掉上傳了卻沒存的圖和檔案 -->
         <ImagePicker v-if="formFor && hasImages" ref="picker" :images="form.images" :trip-id="tripId" />
         <FilePicker v-if="formFor && hasFiles" :files="form.files" :trip-id="tripId" />
+
+        <!-- 營業時間只給自己打的地點；引用清單的照清單項目的顯示。放在備註正上方，跟抽屜裡的順序一樣 -->
+        <HoursField v-if="hasRegion" v-model:closed-day="form.closedDay" :hours="form.hours" />
 
         <div>
           <label class="label" for="e-note">備註（選填）</label>
