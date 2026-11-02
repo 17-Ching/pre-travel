@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { PhPrinter, PhCaretLeft } from '@phosphor-icons/vue'
 import { store, trip, tripMembers, user, flag, countryName, tripDays, entriesOf, flightsOf, staysOf, stayDayLabel, stayNights,
-  arrivesNextDay, entryTitle, entryThumb, entryHours, dayNote, dayLinks, dayRefs, linkLabel, thumbOf, imageOk } from '../store'
+  arrivesNextDay, entryTitle, entryThumb, entryHours, entryStation, dayNote, dayLinks, dayRefs, linkLabel, thumbOf, imageOk } from '../store'
 import LoadState from '../components/LoadState.vue'
 
 // 匯出 PDF：給不用 app 的家人看，也當離線備份。不裝 PDF 套件，排好版用瀏覽器的「列印 → 存成 PDF」。
@@ -116,6 +116,7 @@ const print = () => window.print()
                 <span class="min-w-0 flex-1">
                   <span v-if="timeOf(e)" class="mr-1.5 font-semibold tabular-nums">{{ timeOf(e) }}</span>
                   <span class="font-semibold">{{ entryTitle(e) }}</span>
+                  <span v-if="entryStation(e)" class="ml-1.5 text-neutral-600">🚉 {{ entryStation(e) }}</span>
                   <span v-if="entryHours(e)" class="ml-1.5 text-neutral-600">🕒 {{ entryHours(e) }}</span>
                   <span v-if="e.note" class="block whitespace-pre-line text-neutral-600">{{ e.note }}</span>
                   <span v-if="e.links?.length" class="block text-neutral-600">

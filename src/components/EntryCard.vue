@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
-import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip, PhClock } from '@phosphor-icons/vue'
-import { store, item, entryHours, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
+import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip, PhClock, PhTrain } from '@phosphor-icons/vue'
+import { store, item, entryHours, entryStation, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
 // badge：住宿用來標「入住 / 第 2 晚 / 退房・共 3 晚」，由呼叫端算好（它才知道現在看的是哪天）
@@ -123,7 +123,10 @@ const timeLabel = computed(() => {
             <Avatar :user="u" :size="14" />{{ u.name }}
           </span>
         </span>
-        <!-- 營業時間放在備註上面，跟抽屜、表單同一個順序 -->
+        <!-- 最近車站、營業時間放在備註上面，跟抽屜、表單同一個順序 -->
+        <span v-if="!isTransport && entryStation(entry)" class="mt-1 flex items-center gap-1 text-[11px] text-muted">
+          <PhTrain :size="12" class="shrink-0" /><span class="truncate">{{ entryStation(entry) }}</span>
+        </span>
         <span v-if="!isTransport && entryHours(entry)" class="mt-1 flex items-center gap-1 text-[11px] text-muted">
           <PhClock :size="12" class="shrink-0" /><span class="truncate">{{ entryHours(entry) }}</span>
         </span>

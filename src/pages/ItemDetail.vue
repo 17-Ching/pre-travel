@@ -124,6 +124,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
         <dl class="mt-5 grid gap-3 text-[15px]">
           <div v-if="region" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">地區</dt><dd>{{ region }}</dd></div>
           <div v-if="tags.length" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">標籤</dt><dd class="flex flex-wrap gap-1"><TagChip v-for="n in tags" :key="n" :name="n" /></dd></div>
+          <div v-if="it.type === 'place' && it.station" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">最近車站</dt><dd>{{ it.station }}</dd></div>
           <div v-if="it.type === 'place' && itemHours(it)" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">營業時間</dt><dd>{{ itemHours(it) }}</dd></div>
           <div v-if="isBuy(it.type) && it.plannedStore" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">預計購買</dt><dd>{{ it.plannedStore }}</dd></div>
           <!-- 參考沒有完成狀態：看過了不代表就沒用了 -->

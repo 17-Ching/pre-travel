@@ -714,14 +714,15 @@ export function deleteItem(id) {
   // F-47：資料庫的觸發器會把引用它的行程項目斷開並留下標題快照。
   // 這裡做同一件事，畫面才不用等重新整理就正確。
   const refs = store.entries.filter(e => e.itemId === id)
-  // 營業時間同理：行程自己覆寫過的留著，沿用清單的就把清單的值留下來（觸發器也是這樣做）
-  const snapshot = refs.map(e => ({ e, before: { itemId: e.itemId, title: e.title, detachedAt: e.detachedAt, hours: e.hours, closedDay: e.closedDay } }))
+  // 營業時間、最近車站同理：行程自己覆寫過的留著，沿用清單的就把清單的值留下來（觸發器也是這樣做）
+  const snapshot = refs.map(e => ({ e, before: { itemId: e.itemId, title: e.title, detachedAt: e.detachedAt, hours: e.hours, closedDay: e.closedDay, station: e.station } }))
   refs.forEach(e => {
     e.itemId = null
     e.title = e.title?.trim() || removed.title
     e.detachedAt = now()
     if (!e.hours?.length) e.hours = JSON.parse(JSON.stringify(removed.hours ?? []))
     e.closedDay ??= removed.closedDay ?? null
+    e.station = e.station?.trim() || removed.station || ''
   })
   push(() => api.deleteItem(id).then(() => sweepImages(imagePaths(removed.images))), () => {
     store.items.splice(i, 0, removed)
@@ -751,7 +752,7 @@ export function togglePin(it) {
 }
 
 // F-19 / F-36 / F-33: optimistic status toggle, queued while offline.
-// 行程裡改引用地點的營業時間也走這條（寫回清單項目），patch 帶 hours / closedDay
+// 行程裡改引用地點的營業時間、最近車站也走這條（寫回清單項目），patch 帶 hours / closedDay / station
 export function setStatus(it, patch) {
   const before = Object.fromEntries(Object.keys(patch).map(k => [k, it[k]]))
   Object.assign(it, patch, { updatedAt: now(), updatedBy: store.me })
@@ -933,7 +934,7 @@ function buildEntry(d, order) {
     links: d.links ?? [],
     transportMode: d.transportMode ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
-    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], files: d.files ?? [], regionId: d.regionId ?? null, hours: d.hours ?? [], closedDay: d.closedDay ?? null, done: false, order,
+    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], files: d.files ?? [], regionId: d.regionId ?? null, hours: d.hours ?? [], closedDay: d.closedDay ?? null, station: d.station ?? '', done: false, order,
     detachedAt: null,
     createdBy: store.me, updatedBy: store.me,
     createdAt: now(), updatedAt: now(),
@@ -954,6 +955,8 @@ export const itemHours = it => (it ? fmtHours(it.hours, it.closedDay) : '')
 // 引用別人清單的那筆可以自己填營業時間，有填就蓋過清單的
 export const hasOwnHours = e => Boolean(e.hours?.length || e.closedDay)
 export const entryHours = e => itemHours(e.itemId && !hasOwnHours(e) ? item(e.itemId) : e)
+// 最近車站同一套：行程這筆有填就用自己的，沒填讀清單的
+export const entryStation = e => e.station?.trim() || (e.itemId && item(e.itemId)?.station) || ''
 
 export const entryFromItem = (it, { tripId, date, section, slot }) => ({
   tripId, date, section, slot, kind: 'place', itemId: it.id, title: '',

@@ -40,6 +40,7 @@ const toItem = r => ({
   pinnedAt: r.pinned_at ?? null,   // 參考的置頂。itemRow 刻意不寫它，只有 patchItem 會動
   // 營業時間（地點）：時段陣列＋公休日，見 hours-rules.js。Array.isArray 是為了 migration 前後的舊形狀
   hours: Array.isArray(r.hours) ? r.hours : [], closedDay: r.closed_day ?? null,
+  station: r.station ?? '',   // 最近車站（地點）
 })
 
 // Postgres 的 time 回來是 'HH:MM:SS'，畫面只要 'HH:MM'。
@@ -58,6 +59,7 @@ const toEntry = r => ({
   files: r.files ?? [],
   regionId: r.region_id ?? null,
   hours: Array.isArray(r.hours) ? r.hours : [], closedDay: r.closed_day ?? null,
+  station: r.station ?? '',
   detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
@@ -72,6 +74,7 @@ const filesRow = files => (files ?? []).map(({ path, name, size }) => ({ path, n
 const entryRow = e => ({
   trip_id: e.tripId,
   hours: cleanHours(e.hours), closed_day: e.closedDay ?? null,
+  station: (e.station ?? '').trim().slice(0, 50),
   date: e.date,
   end_date: e.kind === 'stay' ? e.endDate : null,
   section: e.section,
@@ -126,6 +129,7 @@ const itemRow = i => ({
   purchase_status: i.status ?? 'todo',
   planned_store: (i.plannedStore ?? '').slice(0, 100),
   hours: cleanHours(i.hours), closed_day: i.closedDay ?? null,
+  station: (i.station ?? '').trim().slice(0, 50),
 })
 
 // ---- 讀取 ----
@@ -336,6 +340,7 @@ export async function patchItem(id, patch) {
   if ('pinnedAt' in patch) row.pinned_at = patch.pinnedAt
   if ('hours' in patch) row.hours = cleanHours(patch.hours)
   if ('closedDay' in patch) row.closed_day = patch.closedDay ?? null
+  if ('station' in patch) row.station = (patch.station ?? '').trim().slice(0, 50)
   const rows = must(await sb().from('items').update(row).eq('id', id).select(), '更新狀態')
   return toItem(rows[0])
 }
@@ -368,6 +373,7 @@ export async function updateEntry(id, patch) {
   if ('regionId' in patch) row.region_id = patch.regionId || null
   if ('hours' in patch) row.hours = cleanHours(patch.hours)
   if ('closedDay' in patch) row.closed_day = patch.closedDay ?? null
+  if ('station' in patch) row.station = (patch.station ?? '').trim().slice(0, 50)
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done
   if ('date' in patch) row.date = patch.date

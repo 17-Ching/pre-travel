@@ -1,11 +1,11 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPencilSimple, PhWarning,
-  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate, PhFilePdf, PhClock } from '@phosphor-icons/vue'
+  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate, PhFilePdf, PhClock, PhTrain } from '@phosphor-icons/vue'
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
   dayNote, dayLinks, dayRefs, setDayNote, addEntry, addEntries, updateEntry,
   toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
-  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, entryHours, hasOwnHours, linkify, openFile, setStatus } from '../store'
+  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, entryHours, entryStation, hasOwnHours, linkify, openFile, setStatus } from '../store'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
@@ -114,7 +114,7 @@ const addNoteDesc = d => (noteDraft.value = (noteDraft.value ? noteDraft.value +
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
 const ARROW = ' → '
 const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [],
-  passengerIds: [], images: [], files: [], regionId: '', hours: [], closedDay: null, startDate: '', endDate: '', from: '', to: '' })
+  passengerIds: [], images: [], files: [], regionId: '', hours: [], closedDay: null, station: '', startDate: '', endDate: '', from: '', to: '' })
 const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
 const MODES = ['步行', '電車', '巴士', '計程車', '開車', '飛機', '船']
@@ -141,7 +141,7 @@ function openEdit(entry) {
     links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])],
     images: JSON.parse(JSON.stringify(entry.images ?? [])), files: JSON.parse(JSON.stringify(entry.files ?? [])), regionId: entry.regionId ?? '',
     // 引用清單的那筆，行程自己沒填營業時間就先帶清單的進來
-    ...hoursOf(entry.itemId && !hasOwnHours(entry) ? findItem(entry.itemId) : entry),
+    ...hoursOf(entry.itemId && !hasOwnHours(entry) ? findItem(entry.itemId) : entry), station: entryStation(entry),
     startDate: entry.date, endDate: entry.endDate || '', from, to }
   formFor.value = { entry }
 }
@@ -210,16 +210,23 @@ function submitForm() {
     passengerIds: f.kind === 'flight' ? [...f.passengerIds] : [],
     images: hasImages.value ? f.images : [],
     regionId: hasRegion.value ? f.regionId || null : null,
-    // 引用清單的那筆一律存空的（資料庫的 quoted_entry_has_no_hours 擋著），畫面讀清單項目的
+    // 引用清單的那筆預設存空的，畫面讀清單項目的；引用別人清單的覆寫見下面
     hours: hasRegion.value ? cleanHours(f.hours) : [], closedDay: hasRegion.value ? f.closedDay : null,
+    station: hasRegion.value ? f.station.trim() : '',
     files: hasFiles.value ? f.files : [],
     // 住宿是唯一自己帶日期區間的：編輯時連入住日一起改，不走「搬到其他天」
     ...(isStay.value ? { date: stayStart.value, endDate: f.endDate } : {}),
   }
-  const hours = { hours: cleanHours(f.hours), closedDay: f.closedDay }
-  if (refHoursMine.value && !sameHours(hours, refItem.value)) setStatus(refItem.value, hours)
+  // 營業時間、最近車站：只送有變的欄位，跟清單一樣的不寫
+  const it = refItem.value, changed = {}
+  if (it) {
+    const hours = { hours: cleanHours(f.hours), closedDay: f.closedDay }
+    if (!sameHours(hours, it)) Object.assign(changed, hours)
+    if (f.station.trim() !== (it.station ?? '')) changed.station = f.station.trim()
+  }
+  if (refHoursMine.value && Object.keys(changed).length) setStatus(it, changed)
   if (refOthers.value) {
-    Object.assign(patch, sameHours(hours, refItem.value) ? { hours: [], closedDay: null } : hours)
+    Object.assign(patch, changed)
     patch.title = composedTitle.value === refItem.value.title ? '' : composedTitle.value
   }
   if (ctx.entry) updateEntry(ctx.entry, editingRef.value ? patch : { ...patch, title: composedTitle.value })
@@ -620,11 +627,11 @@ const addFor = ref(null)
           </div>
         </div>
         <p v-else-if="refHoursMine" class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
-          這筆引用你清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走，營業時間改了會一起改到清單；備註與連結只屬於行程這一筆。
+          這筆引用你清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走，營業時間、最近車站改了會一起改到清單；備註與連結只屬於行程這一筆。
         </p>
         <template v-else>
           <p v-if="editingRef" class="rounded-[10px] bg-tint-soft/50 px-3 py-2 text-[13px] text-muted">
-            這筆引用{{ user(refItem?.ownerUserId)?.name ?? '別人' }}清單裡的「{{ refItem?.title }}」，照片跟著清單走；標題、營業時間、備註與連結改了只算行程這一筆，不會動到對方的清單。
+            這筆引用{{ user(refItem?.ownerUserId)?.name ?? '別人' }}清單裡的「{{ refItem?.title }}」，照片跟著清單走；標題、最近車站、營業時間、備註與連結改了只算行程這一筆，不會動到對方的清單。
           </p>
           <div>
             <label class="label" for="e-title">{{ isStay ? '住宿名稱' : '標題' }}</label>
@@ -641,7 +648,10 @@ const addFor = ref(null)
             <option value="__new">＋ 新增地區…</option>
           </select>
         </div>
-
+        <div v-if="hasRegion || refItem?.type === 'place'">
+          <label class="label" for="e-station">最近車站（選填）</label>
+          <input id="e-station" v-model="form.station" class="input" maxlength="50" placeholder="例：JR 新宿站 東口" />
+        </div>
 
         <div v-if="isFlight">
           <label class="label" for="e-mode">航空公司與班次</label>
@@ -738,7 +748,10 @@ const addFor = ref(null)
         </button>
       </div>
       <!-- 卡片上的備註是截斷的，抽屜裡給完整內容 -->
-      <!-- 營業時間放在備註上面：到店門口最先要確認的就是這個 -->
+      <!-- 最近車站、營業時間放在備註上面：要出發、到店門口最先要確認的就是這兩個 -->
+      <p v-if="entryMenu && entryStation(entryMenu)" class="mb-2 flex items-start gap-1.5 px-3 text-[14px]">
+        <PhTrain :size="16" class="mt-0.5 shrink-0 text-muted" /><span>{{ entryStation(entryMenu) }}</span>
+      </p>
       <p v-if="entryMenu && entryHours(entryMenu)" class="mb-2 flex items-start gap-1.5 px-3 text-[14px]">
         <PhClock :size="16" class="mt-0.5 shrink-0 text-muted" /><span class="whitespace-pre-line">{{ entryHours(entryMenu) }}</span>
       </p>

@@ -30,7 +30,7 @@ const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
   // v2.0：共同分頁移除（Q8），項目一定進自己的清單分頁
   tripId, type, ownerUserId: store.me,
   title: '', links: [newLink()], regionId: qRegion && qRegion !== 'all' && qRegion !== 'none' ? qRegion : null,
-  images: [], note: '', visited: false, status: 'todo', plannedStore: '', hours: [], closedDay: null, tagIds: [],
+  images: [], note: '', visited: false, status: 'todo', plannedStore: '', hours: [], closedDay: null, station: '', tagIds: [],
 })
 
 const regions = computed(() => regionsOf(tripId))
@@ -92,6 +92,11 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
         <option v-for="r in regions" :key="r.id" :value="r.id">{{ r.name }}</option>
         <option value="__new">＋ 新增地區…</option>
       </select>
+    </div>
+
+    <div v-if="type === 'place'">
+      <label class="label" for="station">最近車站（選填）</label>
+      <input id="station" v-model="f.station" class="input" maxlength="50" placeholder="例：JR 新宿站 東口" />
     </div>
 
     <div v-if="type !== 'gift'">
