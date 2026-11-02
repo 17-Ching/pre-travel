@@ -7,6 +7,7 @@ import * as api from './api'
 import { WEEK, parseDate, todayISO, addDays, coversDate, tripPast } from './date-rules'
 import { imagePaths, unusedPaths } from './image-rules'
 import { getSnapshot, setSnapshot, delSnapshot } from './offline-cache'
+import { fmtHours } from './hours-rules'
 import { sb, isConfigured, signIn as authSignIn, signUp as authSignUp, signOut as authSignOut } from './supabase'
 
 const uid = () => crypto.randomUUID()
@@ -734,7 +735,16 @@ export function copyItem(src) {
     .map(n => ensureTag(src.tripId, n, tagScope(src.type))?.id).filter(Boolean)
   const clone = JSON.parse(JSON.stringify(src))
   delete clone.id
-  return saveItem({ ...clone, ownerUserId: store.me, tagIds, visited: false, status: 'todo' })
+  return saveItem({ ...clone, ownerUserId: store.me, tagIds, visited: false, status: 'todo', pinnedAt: null })
+}
+
+// 參考的置頂：存置頂的時間，最近置頂的排最上面。null＝沒置頂。只有本人能改自己的項目
+export function togglePin(it) {
+  if (store.offline) return toast('需要網路')
+  const before = it.pinnedAt
+  const pinnedAt = before ? null : now()
+  it.pinnedAt = pinnedAt
+  push(() => api.patchItem(it.id, { pinnedAt }), () => { it.pinnedAt = before })
 }
 
 // F-19 / F-36 / F-33: optimistic status toggle, queued while offline.
@@ -916,7 +926,7 @@ function buildEntry(d, order) {
     links: d.links ?? [],
     transportMode: d.transportMode ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
-    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], files: d.files ?? [], regionId: d.regionId ?? null, done: false, order,
+    note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], files: d.files ?? [], regionId: d.regionId ?? null, hours: d.hours ?? [], closedDay: d.closedDay ?? null, done: false, order,
     detachedAt: null,
     createdBy: store.me, updatedBy: store.me,
     createdAt: now(), updatedAt: now(),
@@ -931,6 +941,11 @@ export function addEntry(data) {
 // 標題與照片繼續引用（Q10：清單改了行程跟著改），但備註與連結是複製一份 ——
 // 當天想加「今天只買這個」或換一條路線用的地圖連結，不該回頭改到清單本身。
 // 兩個入口（清單卡片選單、行程時段的「從清單選」）都走這裡，規則只有一份。
+// 營業時間（顯示用的一行字，空字串＝整列不顯示）。
+// 行程：自己打的地點用自己的，引用清單的跟著清單項目走（Q10，跟照片、地區一樣）
+export const itemHours = it => (it ? fmtHours(it.hours, it.closedDay) : '')
+export const entryHours = e => itemHours(e.itemId ? item(e.itemId) : e)
+
 export const entryFromItem = (it, { tripId, date, section, slot }) => ({
   tripId, date, section, slot, kind: 'place', itemId: it.id, title: '',
   links: JSON.parse(JSON.stringify(it.links ?? [])),

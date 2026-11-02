@@ -1,16 +1,18 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPencilSimple, PhWarning,
-  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate, PhFilePdf } from '@phosphor-icons/vue'
+  PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate, PhFilePdf, PhClock } from '@phosphor-icons/vue'
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
   dayNote, dayLinks, dayRefs, setDayNote, addEntry, addEntries, updateEntry,
   toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
-  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, linkify, openFile } from '../store'
+  regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, entryHours, linkify, openFile } from '../store'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
 import ImagePicker from './ImagePicker.vue'
 import FilePicker from './FilePicker.vue'
+import HoursField from './HoursField.vue'
+import { cleanHours } from '../hours-rules'
 import ImageZoom from './ImageZoom.vue'
 import LinkFields from './LinkFields.vue'
 
@@ -111,7 +113,7 @@ const addNoteDesc = d => (noteDraft.value = (noteDraft.value ? noteDraft.value +
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
 const ARROW = ' → '
 const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [],
-  passengerIds: [], images: [], files: [], regionId: '', startDate: '', endDate: '', from: '', to: '' })
+  passengerIds: [], images: [], files: [], regionId: '', hours: [], closedDay: null, startDate: '', endDate: '', from: '', to: '' })
 const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
 const MODES = ['步行', '電車', '巴士', '計程車', '開車', '飛機', '船']
@@ -136,7 +138,7 @@ function openEdit(entry) {
   form.value = { title: entry.itemId ? '' : entry.title, kind: entry.kind, transportMode: entry.transportMode || '',
     startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
     links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])],
-    images: JSON.parse(JSON.stringify(entry.images ?? [])), files: JSON.parse(JSON.stringify(entry.files ?? [])), regionId: entry.regionId ?? '',
+    images: JSON.parse(JSON.stringify(entry.images ?? [])), files: JSON.parse(JSON.stringify(entry.files ?? [])), regionId: entry.regionId ?? '', hours: JSON.parse(JSON.stringify(entry.hours ?? [])), closedDay: entry.closedDay ?? null,
     startDate: entry.date, endDate: entry.endDate || '', from, to }
   formFor.value = { entry }
 }
@@ -197,6 +199,8 @@ function submitForm() {
     passengerIds: f.kind === 'flight' ? [...f.passengerIds] : [],
     images: hasImages.value ? f.images : [],
     regionId: hasRegion.value ? f.regionId || null : null,
+    // 引用清單的那筆一律存空的（資料庫的 quoted_entry_has_no_hours 擋著），畫面讀清單項目的
+    hours: hasRegion.value ? cleanHours(f.hours) : [], closedDay: hasRegion.value ? f.closedDay : null,
     files: hasFiles.value ? f.files : [],
     // 住宿是唯一自己帶日期區間的：編輯時連入住日一起改，不走「搬到其他天」
     ...(isStay.value ? { date: stayStart.value, endDate: f.endDate } : {}),
@@ -607,6 +611,8 @@ const addFor = ref(null)
           這筆引用清單裡的「{{ entryTitle(formFor.entry) }}」，標題與照片跟著清單走；下面的備註與連結只屬於行程這一筆。
         </p>
 
+        <!-- 營業時間只給自己打的地點；引用清單的照清單項目的顯示 -->
+        <HoursField v-if="hasRegion" v-model:closed-day="form.closedDay" :hours="form.hours" />
         <div v-if="hasRegion">
           <label class="label" for="e-region">地區（選填）</label>
           <select id="e-region" class="input" :value="form.regionId" @change="onRegion">
@@ -709,6 +715,10 @@ const addFor = ref(null)
         </button>
       </div>
       <!-- 卡片上的備註是截斷的，抽屜裡給完整內容 -->
+      <!-- 營業時間放在備註上面：到店門口最先要確認的就是這個 -->
+      <p v-if="entryMenu && entryHours(entryMenu)" class="mb-2 flex items-start gap-1.5 px-3 text-[14px]">
+        <PhClock :size="16" class="mt-0.5 shrink-0 text-muted" /><span class="whitespace-pre-line">{{ entryHours(entryMenu) }}</span>
+      </p>
       <p v-if="entryMenu?.note" class="mb-1 max-h-48 overflow-auto whitespace-pre-line border-b border-line px-3 pb-3 text-[14px] leading-relaxed text-muted"><span v-html="linkify(entryMenu.note)" /></p>
       <!-- 真的 <a>：手機上 Google Maps 連結要能跳到地圖 App（F-15） -->
       <div v-if="entryMenu?.links?.length" class="mb-1 border-b border-line pb-1">

@@ -1,6 +1,7 @@
 // Supabase 存取層。只負責「送出請求」與「欄位轉換」，不碰畫面狀態。
 // 資料庫是 snake_case，畫面用 camelCase，轉換全部集中在這裡，其他檔案看不到 snake_case。
 import { sb } from './supabase'
+import { cleanHours } from './hours-rules'
 
 // RLS 擋 UPDATE / DELETE 時不會報錯，只是靜默影響 0 筆。
 // 所以每個寫入都要 .select() 回來數筆數，沒有 error 不等於成功。
@@ -36,6 +37,9 @@ const toItem = r => ({
   visited: r.visited, status: r.purchase_status, plannedStore: r.planned_store ?? '',
   tagIds: [], createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
+  pinnedAt: r.pinned_at ?? null,   // 參考的置頂。itemRow 刻意不寫它，只有 patchItem 會動
+  // 營業時間（地點）：時段陣列＋公休日，見 hours-rules.js。Array.isArray 是為了 migration 前後的舊形狀
+  hours: Array.isArray(r.hours) ? r.hours : [], closedDay: r.closed_day ?? null,
 })
 
 // Postgres 的 time 回來是 'HH:MM:SS'，畫面只要 'HH:MM'。
@@ -53,6 +57,7 @@ const toEntry = r => ({
   images: r.images ?? [],
   files: r.files ?? [],
   regionId: r.region_id ?? null,
+  hours: Array.isArray(r.hours) ? r.hours : [], closedDay: r.closed_day ?? null,
   detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
@@ -66,6 +71,7 @@ const filesRow = files => (files ?? []).map(({ path, name, size }) => ({ path, n
 
 const entryRow = e => ({
   trip_id: e.tripId,
+  hours: cleanHours(e.hours), closed_day: e.closedDay ?? null,
   date: e.date,
   end_date: e.kind === 'stay' ? e.endDate : null,
   section: e.section,
@@ -119,6 +125,7 @@ const itemRow = i => ({
   visited: Boolean(i.visited),
   purchase_status: i.status ?? 'todo',
   planned_store: (i.plannedStore ?? '').slice(0, 100),
+  hours: cleanHours(i.hours), closed_day: i.closedDay ?? null,
 })
 
 // ---- 讀取 ----
@@ -326,6 +333,7 @@ export async function patchItem(id, patch) {
   const row = {}
   if ('visited' in patch) row.visited = patch.visited
   if ('status' in patch) row.purchase_status = patch.status
+  if ('pinnedAt' in patch) row.pinned_at = patch.pinnedAt
   const rows = must(await sb().from('items').update(row).eq('id', id).select(), '更新狀態')
   return toItem(rows[0])
 }
@@ -356,6 +364,8 @@ export async function updateEntry(id, patch) {
   if ('images' in patch) row.images = imagesRow(patch.images)
   if ('files' in patch) row.files = filesRow(patch.files)
   if ('regionId' in patch) row.region_id = patch.regionId || null
+  if ('hours' in patch) row.hours = cleanHours(patch.hours)
+  if ('closedDay' in patch) row.closed_day = patch.closedDay ?? null
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done
   if ('date' in patch) row.date = patch.date

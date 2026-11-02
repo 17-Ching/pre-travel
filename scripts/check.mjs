@@ -6,6 +6,7 @@ import { isBlocked, meta, decode, toText } from '../api/preview.js'
 import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, validateNewPassword } from '../src/auth-rules.js'
 import { addDays, daysBetween, coversDate, stayNights, stayDayLabel, tripPast } from '../src/date-rules.js'
 import { imagePaths, unusedPaths } from '../src/image-rules.js'
+import { cleanHours, fmtHours } from '../src/hours-rules.js'
 import { splitEven, debts, totals, fmtMoney, byCategory, categoryOf } from '../src/expense-rules.js'
 import { readFileSync } from 'node:fs'
 import { CHANGELOG } from '../src/changelog.js'
@@ -192,6 +193,15 @@ assert.deepEqual(cat[0].rows.map(r => [r.category, r.amount]), [['transport', 30
 assert.equal(cat[1].rows[0].category, 'other', '沒有類別的舊帳算「其他」')
 assert.equal(categoryOf('不存在')[0], 'other')
 assert.equal(fmtMoney(3200, 'JPY'), '¥3,200')
+
+// ── 營業時間：只填一格的不算、照開始時間排、營業到半夜照樣收
+assert.deepEqual(cleanHours([{ open: '17:00', close: '21:00' }, { open: '11:00', close: '14:30' }, { open: '09:00', close: '' }]),
+  [{ open: '11:00', close: '14:30' }, { open: '17:00', close: '21:00' }])
+assert.equal(fmtHours([{ open: '11:00', close: '14:30' }, { open: '17:00', close: '21:00' }], 'mon'), '11:00–14:30、17:00–21:00・週一公休')
+assert.equal(fmtHours([{ open: '18:00', close: '02:00' }], null), '18:00–02:00', '沒選公休日就不顯示')
+assert.equal(fmtHours([], 'none'), '全年無休')
+assert.equal(fmtHours([], null), '', '什麼都沒填就整列不顯示')
+assert.equal(fmtHours(undefined, undefined), '', 'migration 前的舊資料')
 
 // ── 版本號與更新紀錄。畫面上的版本號吃 package.json，點開看到的是 changelog，
 // 兩份是分開手改的 —— 改了一邊忘了另一邊，使用者就會看到「v2.2.0」點開最新一筆卻是 2.1.0。

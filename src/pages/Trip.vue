@@ -2,9 +2,9 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
-  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight, PhWallet } from '@phosphor-icons/vue'
+  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight, PhWallet, PhPushPin, PhPushPinSlash } from '@phosphor-icons/vue'
 import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatus, copyItem, deleteItem, toast, now, fmtTime, tagColor, sourceLabel, linkLabel,
-  tripDays, addEntry, entryFromItem, scheduledSlots, tagScope, closedGroups, isBuy } from '../store'
+  tripDays, addEntry, entryFromItem, scheduledSlots, tagScope, closedGroups, isBuy, togglePin } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
 import LoadState from '../components/LoadState.vue'
@@ -90,8 +90,12 @@ const groups = computed(() => {
   }
   const names = (p.tags.length ? tagNames.value.filter(n => p.tags.includes(n)) : tagNames.value)
     .slice().sort((a, b) => a.localeCompare(b, 'zh-Hant'))
-  return [...names.map(n => ({ key: 'tag-' + n, name: n, items: filtered.value.filter(i => i.tagIds.some(id => tagNameOf(id) === n)) })),
-    { key: 'untagged', name: '沒有標籤', items: filtered.value.filter(i => !i.tagIds.some(tagNameOf)) }].filter(keep)
+  // 置頂的自成一組排在最前面，最近置頂的在上；它們不再出現在下面的標籤分組裡，免得同一支看到兩次
+  const pinned = filtered.value.filter(i => i.pinnedAt).sort((a, b) => b.pinnedAt.localeCompare(a.pinnedAt))
+  const rest = filtered.value.filter(i => !i.pinnedAt)
+  return [{ key: 'pinned', name: '置頂', items: pinned },
+    ...names.map(n => ({ key: 'tag-' + n, name: n, items: rest.filter(i => i.tagIds.some(id => tagNameOf(id) === n)) })),
+    { key: 'untagged', name: '沒有標籤', items: rest.filter(i => !i.tagIds.some(tagNameOf)) }].filter(keep)
 })
 const done = computed(() => scoped.value.filter(i => (isBuy(p.type) ? i.status === 'bought' : i.visited)).length)
 const hasFilter = computed(() => p.regions.length || p.status || p.tags.length || p.q)
@@ -340,6 +344,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
               <PhCaretRight :size="12" weight="bold" :class="['shrink-0 text-tint transition-transform duration-150', isOpen(g) && 'rotate-90']" />
               <!-- 名稱只吃它需要的寬度（不 flex-1），數量才會緊跟在字後面；
                    太長時名稱自己截斷，數量永遠看得到 -->
+              <PhPushPin v-if="g.key === 'pinned'" :size="14" weight="fill" class="shrink-0 text-accent" />
               <span class="min-w-0 truncate">{{ g.name }}</span>
               <span class="shrink-0 text-[13px] font-normal tabular-nums text-muted">{{ g.items.length }}</span>
             </button>
@@ -466,6 +471,11 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         </a>
       </div>
       <!-- F-41：清單這一側的「加入行程」入口 -->
+      <!-- 參考的置頂：只有自己的清單可以按 -->
+      <button v-if="itemMenu?.type === 'reference' && editable" class="row" :disabled="store.offline" @click="togglePin(itemMenu); itemMenu = null">
+        <component :is="itemMenu?.pinnedAt ? PhPushPinSlash : PhPushPin" :size="20" class="text-muted" />
+        <span class="flex-1">{{ itemMenu?.pinnedAt ? '取消置頂' : '置頂' }}</span>
+      </button>
       <button v-if="itemMenu?.type === 'place'" class="row" :disabled="store.offline" @click="addToItinerary">
         <PhCalendarBlank :size="20" class="text-muted" /><span class="flex-1">加入行程</span>
       </button>

@@ -6,6 +6,8 @@ import { store, isBuy, item as getItem, regionsOf, myTags, tagScope, ensureTag, 
 import TopBar from '../components/TopBar.vue'
 import LinkFields from '../components/LinkFields.vue'
 import ImagePicker from '../components/ImagePicker.vue'
+import HoursField from '../components/HoursField.vue'
+import { cleanHours } from '../hours-rules'
 
 const route = useRoute(), router = useRouter()
 const tripId = route.params.tripId
@@ -28,7 +30,7 @@ const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
   // v2.0：共同分頁移除（Q8），項目一定進自己的清單分頁
   tripId, type, ownerUserId: store.me,
   title: '', links: [newLink()], regionId: qRegion && qRegion !== 'all' && qRegion !== 'none' ? qRegion : null,
-  images: [], note: '', visited: false, status: 'todo', plannedStore: '', tagIds: [],
+  images: [], note: '', visited: false, status: 'todo', plannedStore: '', hours: [], closedDay: null, tagIds: [],
 })
 
 const regions = computed(() => regionsOf(tripId))
@@ -63,6 +65,7 @@ const addDesc = d => (f.value.note = (f.value.note ? f.value.note + '\n' : '') +
 const canSave = computed(() => f.value.title.trim())
 function save() {
   f.value.links = f.value.links.filter(l => l.url.trim()) // 空白列不存
+  f.value.hours = cleanHours(f.value.hours)              // 只填一格的時段不存
   saveItem(f.value)
   existing ? router.back() : router.replace(`/trips/${tripId}`)
 }
@@ -100,6 +103,9 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
       <input id="tag" v-model="tagInput" class="input" maxlength="20" :placeholder="KIND[type].tag ?? '輸入新標籤，按 Enter 建立'" @keydown.enter.prevent="tagInput.trim() && addTag()" />
       <button v-if="tagInput.trim() && !tagExists" class="mt-2 text-[13px] font-medium text-accent" @click="addTag">建立「{{ tagInput.trim() }}」</button>
     </div>
+
+    <!-- 營業時間：手動輸入。Google Maps / Naver 的網址抓不到（Google 要付費 API、Naver 沒有公開 API） -->
+    <HoursField v-if="type === 'place'" v-model:closed-day="f.closedDay" :hours="f.hours" />
 
     <template v-if="isBuy(type)">
       <div>

@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
-import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip } from '@phosphor-icons/vue'
-import { store, item, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
+import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip, PhClock } from '@phosphor-icons/vue'
+import { store, item, entryHours, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
 // badge：住宿用來標「入住 / 第 2 晚 / 退房・共 3 晚」，由呼叫端算好（它才知道現在看的是哪天）
@@ -125,6 +125,9 @@ const timeLabel = computed(() => {
         </span>
         <span v-if="entry.note" class="mt-1 line-clamp-2 whitespace-pre-line text-[12px] leading-relaxed text-muted">{{ entry.note }}</span>
         <!-- F-47：引用的地點被刪掉了，標題留成快照 -->
+        <span v-if="!isTransport && entryHours(entry)" class="mt-1 flex items-center gap-1 text-[11px] text-muted">
+          <PhClock :size="12" class="shrink-0" /><span class="truncate">{{ entryHours(entry) }}</span>
+        </span>
         <span v-if="detached" class="mt-1 block text-[11px] text-muted">原項目已刪除</span>
       </span>
     </button>

@@ -1,8 +1,8 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { PhMapPin, PhShoppingBag, PhGift, PhCheck, PhDotsThreeVertical, PhYoutubeLogo, PhInstagramLogo, PhThreadsLogo,
-  PhFacebookLogo, PhXLogo, PhLink } from '@phosphor-icons/vue'
-import { store, isBuy, user, sourceLabel, linkLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
+  PhFacebookLogo, PhXLogo, PhLink, PhClock } from '@phosphor-icons/vue'
+import { store, isBuy, itemHours, user, sourceLabel, linkLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
 import TagChip from './TagChip.vue'
 import Avatar from './Avatar.vue'
 
@@ -90,6 +90,7 @@ function fire(evt) {
              它只在一個字真的放不下時才斷，一般中英文標題的斷行不受影響 -->
         <h3 :class="['line-clamp-2 text-[16px] font-semibold leading-[1.35] tracking-tight wrap-anywhere', item.status === 'bought' && 'line-through decoration-1']">{{ item.title }}</h3>
         <p v-if="item.plannedStore" class="mt-1 truncate text-[13px] font-medium text-accent">{{ item.plannedStore }}</p>
+        <p v-if="item.type === 'place' && itemHours(item)" class="mt-1 flex items-center gap-1 text-[12px] text-muted"><PhClock :size="13" class="shrink-0" /><span class="truncate">{{ itemHours(item) }}</span></p>
         <div v-if="region || tags.length || scheduled" class="mt-2 flex flex-wrap gap-1.5">
           <span v-if="scheduled" class="inline-flex h-[22px] items-center gap-1 rounded-md bg-accent-soft px-1.5 text-[11px] font-semibold text-accent">
             已排入行程<template v-if="scheduled > 1"> {{ scheduled }}</template>
