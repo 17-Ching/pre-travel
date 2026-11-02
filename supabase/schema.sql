@@ -109,6 +109,22 @@ create table if not exists public.items (
   purchase_status text not null default 'todo' check (purchase_status in ('todo', 'bought', 'not_found')),
   planned_store   text not null default '' check (char_length(planned_store) <= 100),
   sort_order      int not null default 0,
+  -- v2.13.0：置頂。null = 沒置頂，有值 = 置頂的時間，前端照時間新到舊排。
+  -- 用時間不用 boolean，排序就不用再加一個欄位。目前只有 type = 'reference' 的
+  -- 介面會用到，但欄位本身不限 type，所以不加約束。
+  pinned_at       timestamptz,
+  -- v2.13.0：營業時間。時段陣列 [{ open, close }]，時間是 "HH:MM" 字串。
+  -- 用陣列是因為餐廳會有午休（11:00–14:30、17:00–21:00 兩段）。
+  -- close 可以早於 open —— 營業到半夜的 18:00–02:00 是合法的，不要加約束擋。
+  -- 跟 itinerary_entries.start_time 一樣不做時區換算（D8）。
+  -- 內容不驗格式，理由同 links / images / files：時間是 <input type="time">
+  -- 產生的，源頭就只會是 HH:MM，在這裡再驗一次只擋得到前端自己的 bug。
+  -- 介面只有 type = 'place' 會填，但欄位本身不限 type。
+  hours           jsonb not null default '[]'::jsonb,
+  -- 公休日。三種狀態要分得開：null = 沒選（畫面不顯示），'none' = 選了「無」
+  -- （畫面顯示全年無休），其餘 = 那一天公休。用 null 當「沒選」而不是另一個
+  -- 字串，是因為舊資料加欄位後本來就是 null，剛好就是「沒選」。
+  closed_day      text check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none')),
   created_by      uuid not null references public.profiles on delete cascade,
   updated_by      uuid references public.profiles on delete set null,
   created_at      timestamptz not null default now(),
@@ -120,6 +136,14 @@ create table if not exists public.items (
 -- images 從 v2.3.0 起會寫（使用者自己上傳的姿勢、構圖參考圖），但不會自動轉存連結預覽圖。
 alter table public.items drop constraint if exists items_type_check;
 alter table public.items add constraint items_type_check check (type in ('place', 'shopping', 'reference', 'gift'));
+-- v2.13.0：既有資料庫補上置頂欄位。可為 null，所以舊資料不用回填，預設就是沒置頂。
+alter table public.items add column if not exists pinned_at timestamptz;
+-- v2.13.0：營業時間（時段陣列）與公休日。
+alter table public.items add column if not exists hours jsonb not null default '[]'::jsonb;
+alter table public.items add column if not exists closed_day text;
+alter table public.items drop constraint if exists items_closed_day_check;
+alter table public.items add constraint items_closed_day_check
+  check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none'));
 
 create table if not exists public.item_tags (
   item_id uuid not null references public.items on delete cascade,
@@ -165,6 +189,10 @@ create table if not exists public.itinerary_entries (
   -- v2.9.0：航班與住宿可以附 PDF（電子機票、訂房確認信），格式 [{ path, name, size }]。
   -- 跟圖片放同一個 media bucket，路徑是 `${trip_id}/<uuid>.pdf`。
   files          jsonb not null default '[]'::jsonb,
+  -- v2.13.0：營業時間與公休日，格式同 items（見那邊的註解）。只有自己打的地點
+  -- 會填，引用清單的那種讀 items 的值（Q10），見下方 quoted_entry_has_no_hours。
+  hours          jsonb not null default '[]'::jsonb,
+  closed_day     text check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none')),
   -- v2.5.0：自己打的地點也能選地區。on delete set null 跟 items.region_id 一樣，
   -- 地區被刪掉只是變成沒有地區，不會連帶刪掉行程那筆
   region_id      uuid references public.regions on delete set null,
@@ -202,7 +230,12 @@ create table if not exists public.itinerary_entries (
   constraint quoted_entry_has_no_region check (item_id is null or region_id is null),
   -- v2.9.0：只有航班與住宿會附 PDF。其他 kind 掛檔案沒有地方顯示，
   -- 刪掉的時候也不會有人想到要清，就變成孤兒檔
-  constraint files_only_on_flight_stay check (kind in ('flight', 'stay') or files = '[]'::jsonb)
+  constraint files_only_on_flight_stay check (kind in ('flight', 'stay') or files = '[]'::jsonb),
+  -- v2.13.0：同 images 與 region_id，引用清單的那種營業時間跟著清單項目走
+  -- （畫面讀 items 的值）。自己再存一份就會有兩個可能互相矛盾的營業時間。
+  -- 兩個欄位都要管：只擋 hours 的話，公休日還是會各存一份。
+  constraint quoted_entry_has_no_hours
+    check (item_id is null or (hours = '[]'::jsonb and closed_day is null))
 );
 
 -- TripDay：備註、連結、引用的參考三個都空才不留資料列（PRD §4.1 的 F-43）。
@@ -260,6 +293,15 @@ alter table public.itinerary_entries add constraint files_only_on_flight_stay
 alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_region;
 alter table public.itinerary_entries add constraint quoted_entry_has_no_region
   check (item_id is null or region_id is null);
+-- 行程的營業時間與公休日（v2.13.0）。引用清單的那種跟著清單項目走，同 images / region_id
+alter table public.itinerary_entries add column if not exists hours jsonb not null default '[]'::jsonb;
+alter table public.itinerary_entries add column if not exists closed_day text;
+alter table public.itinerary_entries drop constraint if exists itinerary_entries_closed_day_check;
+alter table public.itinerary_entries add constraint itinerary_entries_closed_day_check
+  check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none'));
+alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_hours;
+alter table public.itinerary_entries add constraint quoted_entry_has_no_hours
+  check (item_id is null or (hours = '[]'::jsonb and closed_day is null));
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 

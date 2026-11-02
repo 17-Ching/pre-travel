@@ -211,6 +211,58 @@ select denied(
   format('insert into items (trip_id, owner_user_id, type, title, created_by) values (%L, %L, %L, %L, %L)',
          :'trip_id', :'ruby', 'xxx', '亂填類型', :'ruby'),
   '不是三種之一的 type 仍然擋著');
+
+-- 置頂（v2.13.0）。借上面那筆參考當素材，跟著一起被下面的 delete 清掉。
+select id as ruby_ref from items where type = 'reference' \gset
+do $$ begin
+  perform ok((select pinned_at from items where type = 'reference') is null,
+    '新增的項目預設沒有置頂');
+end $$;
+update items set pinned_at = now() where id = :'ruby_ref';
+do $$ begin
+  perform ok((select pinned_at from items where type = 'reference') is not null,
+    '本人可以置頂自己的項目');
+end $$;
+update items set pinned_at = null where id = :'ruby_ref';
+do $$ begin
+  perform ok((select pinned_at from items where type = 'reference') is null,
+    '置頂可以取消');
+end $$;
+-- 重點：置頂沒有自己的 policy，靠的是 items_update 的 owner 檢查。
+-- 哪天那條 using 被放寬，這裡會先叫。
+select denied(
+  format('update items set pinned_at = now() where id = %L', :'jean_item'),
+  'Ruby 不能置頂 Jean 分頁的項目');
+
+-- 營業時間與公休日（v2.13.0）
+do $$ begin
+  perform ok((select hours from items where type = 'reference') = '[]'::jsonb,
+    '營業時間預設是空陣列，不是 null');
+  perform ok((select closed_day from items where type = 'reference') is null,
+    '公休日預設是 null（＝沒選，跟選了「無」不一樣）');
+end $$;
+-- 午休分兩段，而且第二段跨夜（18:00 開到隔天 02:00）。
+-- close 早於 open 要存得進去 —— 加約束擋掉的話半夜場就填不了。
+update items set hours = '[{"open":"11:00","close":"14:30"},{"open":"18:00","close":"02:00"}]'::jsonb,
+                 closed_day = 'mon'
+where id = :'ruby_ref';
+do $$ begin
+  perform ok((select jsonb_array_length(hours) from items where type = 'reference') = 2,
+    '營業時間可以存多段（午休）');
+  perform ok((select hours -> 1 ->> 'close' from items where type = 'reference') = '02:00',
+    '收店時間早於開店時間存得進去（營業到半夜）');
+  perform ok((select closed_day from items where type = 'reference') = 'mon',
+    '可以選公休日');
+end $$;
+update items set closed_day = 'none' where id = :'ruby_ref';
+do $$ begin
+  perform ok((select closed_day from items where type = 'reference') = 'none',
+    '「無」是一個實際的值，不是 null');
+end $$;
+select denied(
+  format('update items set closed_day = %L where id = %L', 'monday', :'ruby_ref'),
+  '不是那八個值的公休日會被擋');
+
 delete from items where type = 'reference';
 
 -- ── 標籤：成員都看得到，只有本人能改（F-22）──────────────────
@@ -412,6 +464,29 @@ select denied(
          :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
          :'tokyo_id', :'ruby'),
   '引用清單的行程項目不能自己選地區');
+
+-- v2.13.0 行程營業時間：同圖片與地區，引用清單的那種讀 items 的值，自己這兩欄留空
+update itinerary_entries set hours = '[{"open":"10:00","close":"18:00"}]'::jsonb,
+                             closed_day = 'wed'
+where title = '自己打的夜景點';
+do $$ begin
+  perform ok((select jsonb_array_length(hours) from itinerary_entries
+              where title = '自己打的夜景點') = 1,
+    '自己打的地點可以填營業時間');
+  perform ok((select closed_day from itinerary_entries where title = '自己打的夜景點') = 'wed',
+    '自己打的地點可以選公休日');
+end $$;
+-- 約束有兩半，兩半都要驗：只擋 hours 的話，公休日還是會各存一份
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, item_id, hours, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
+         '[{"open":"10:00","close":"18:00"}]', :'ruby'),
+  '引用清單的行程項目不能自己填營業時間');
+select denied(
+  format('insert into itinerary_entries (trip_id, date, section, slot, item_id, closed_day, created_by) values (%L, %L, %L, %L, %L, %L, %L)',
+         :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
+         'wed', :'ruby'),
+  '引用清單的行程項目不能自己選公休日');
 
 -- v2.9.0：航班與住宿可以附 PDF，其他 kind 不行。
 -- 這段同時驗了「加欄位不需要補 grant」—— 是以 authenticated 的身分寫入新欄位，

@@ -114,7 +114,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 97 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 112 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -298,7 +298,12 @@ supabase/
   migrate-expense-category.sql  expenses 加 category（v2.12.0，六個固定值）。
                         同一支一起換掉 save_group_expense，不然共同帳的類別會
                         永遠停在 other 而且不報錯。可重複執行
-  rls-test.sql        權限驗證，97 項。跑在用完就丟的本機 Postgres
+  migrate-v2-13.sql   items 加 pinned_at（參考可以置頂）＋ items 與
+                        itinerary_entries 都加 hours（營業時段陣列）與 closed_day
+                        （公休日）。合成一支，因為 hours 漏跑的話前端每次存檔都會
+                        整筆失敗，分兩支就有半套的空間。pinned_at 用 timestamptz
+                        不是 boolean，時間本身就是排序依據。RLS 不動。可重複執行
+  rls-test.sql        權限驗證，112 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址
