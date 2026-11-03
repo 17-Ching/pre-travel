@@ -39,6 +39,9 @@ self.addEventListener('fetch', e => {
 
   if (url.origin === location.origin) {
     if (url.pathname.startsWith('/api/')) return   // 連結預覽要即時抓，不快取
+    // 開發伺服器的原始檔（/src/、/@vite/、/node_modules/）檔名不帶 hash，快取優先會永遠拿到舊的。
+    // 正式版沒有這些路徑；會碰到是因為同一個網址先開過正式版（vite preview），sw 留下來了
+    if (/^\/(src|@|node_modules)\//.test(url.pathname)) return
     e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(SHELL).then(c => c.put(req, copy)) }
       return res

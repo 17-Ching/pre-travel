@@ -59,12 +59,14 @@ function onTouchEnd() {
          把面板整個往上頂。焦點留在這個 tabindex="-1" 的容器，鍵盤等使用者點輸入框才開，
          方向鍵也還能捲動抽屜內容。 -->
     <div tabindex="-1" autofocus
-      :class="['sheet-scroll px-3 pt-2.5 focus:outline-none', !slots.footer && 'pb-[calc(0.75rem+env(safe-area-inset-bottom))]']">
+      :class="['sheet-scroll px-3 pt-2.5 focus:outline-none', slots.footer ? 'pb-4' : 'pb-[calc(0.75rem+env(safe-area-inset-bottom))]']">
       <div class="mx-auto mb-2 h-1 w-9 rounded-full bg-line" aria-hidden="true" />
-      <h2 v-if="title" class="mb-1 px-3 pt-1 text-[13px] font-medium tracking-wide text-muted">{{ title }}</h2>
+      <!-- 標題與內容同一條左邊線：內容一律 px-3（.row 本身也是 px-3），標題跟著 px-3 -->
+      <h2 v-if="title" class="mb-3 px-3 pt-1 text-[17px] font-semibold text-ink">{{ title }}</h2>
       <slot />
     </div>
-    <div v-if="slots.footer" class="shrink-0 border-t border-line px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
+    <!-- px-6＝捲動區的 px-3 加內容的 px-3，底下的按鈕跟上面的輸入框左右對齊 -->
+    <div v-if="slots.footer" class="shrink-0 border-t border-line px-6 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-3">
       <slot name="footer" />
     </div>
   </dialog>

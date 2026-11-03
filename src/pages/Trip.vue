@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { PhPlus, PhDotsThreeVertical, PhMagnifyingGlass, PhWifiSlash, PhCheck, PhX, PhSlidersHorizontal,
-  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight, PhWallet, PhPushPin, PhPushPinSlash } from '@phosphor-icons/vue'
+  PhCopy, PhPencilSimple, PhTrash, PhArrowSquareOut, PhCalendarBlank, PhListChecks, PhCaretRight, PhWallet, PhPushPin, PhPushPinSlash, PhSuitcaseRolling } from '@phosphor-icons/vue'
 import { store, trip, prefs, tripMembers, user, me, isOwner, regionsOf, setStatus, copyItem, deleteItem, toast, now, fmtTime, tagColor, sourceLabel, linkLabel,
   tripDays, addEntry, entryFromItem, scheduledSlots, tagScope, closedGroups, isBuy, togglePin } from '../store'
 import TopBar from '../components/TopBar.vue'
@@ -11,6 +11,7 @@ import LoadState from '../components/LoadState.vue'
 import ItemCard from '../components/ItemCard.vue'
 import Itinerary from '../components/Itinerary.vue'
 import Ledger from '../components/Ledger.vue'
+import Packing from '../components/Packing.vue'
 import Sheet from '../components/Sheet.vue'
 
 const route = useRoute(), router = useRouter()
@@ -24,7 +25,7 @@ const missing = computed(() => store.ready && !store.loading && !store.loadError
 const p = prefs(tripId) // F-09 / F-24: tab, type and filters remembered locally
 // 舊的 prefs 只有一個 tab，值可能是 'shared'（v2.0 移除）、'me' 或某個成員 id。
 // 現在分兩層：tab 是願望清單／行程／記帳，「看誰的清單」記在 who。
-if (!['list', 'itinerary', 'ledger'].includes(p.tab)) { p.who = p.tab === 'shared' ? 'me' : p.tab; p.tab = 'list' }
+if (!['list', 'itinerary', 'ledger', 'packing'].includes(p.tab)) { p.who = p.tab === 'shared' ? 'me' : p.tab; p.tab = 'list' }
 p.who ??= 'me'
 // ?tab= / ?who= 來自複製與加入行程的 toast；同一個元件實例，所以用 watch 不是讀一次
 watch(() => route.query, q => {
@@ -39,6 +40,7 @@ const others = computed(() => tripMembers(tripId).filter(m => m.userId !== store
   .sort((a, b) => (a.status === 'left') - (b.status === 'left') || a.joinedAt.localeCompare(b.joinedAt)))
 const onItinerary = computed(() => p.tab === 'itinerary')
 const onLedger = computed(() => p.tab === 'ledger')
+const onPacking = computed(() => p.tab === 'packing')
 // 願望清單專用的那一整塊（看誰的、子清單、篩選）在另外兩個分頁都不出現
 const onList = computed(() => p.tab === 'list')
 const tabOwner = computed(() => (p.who === 'me' ? store.me : p.who))
@@ -259,6 +261,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
         <button :class="tabCls('list')" @click="p.tab = 'list'"><PhListChecks :size="18" />願望清單</button>
         <button :class="tabCls('itinerary')" @click="p.tab = 'itinerary'"><PhCalendarBlank :size="18" />行程</button>
         <button :class="tabCls('ledger')" @click="p.tab = 'ledger'"><PhWallet :size="18" />記帳</button>
+        <button :class="tabCls('packing')" @click="p.tab = 'packing'"><PhSuitcaseRolling :size="18" />行李</button>
       </nav>
 
       <!-- 「看誰的清單」收進願望清單裡，只有真的有別人時才出現 -->
@@ -304,6 +307,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 
     <Itinerary v-if="onItinerary" :trip-id="tripId" />
     <Ledger v-else-if="onLedger" :trip-id="tripId" />
+    <Packing v-else-if="onPacking" :trip-id="tripId" />
 
     <main v-else class="gutter pb-32 pt-4">
       <!-- 篩選入口跟著清單捲動；捲走之後由上面那條 sticky 摘要接手顯示狀態 -->
@@ -371,7 +375,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 
     <!-- F-41：從清單加入行程。選日期與時段只是選起來，按下面那顆才真的加 -->
     <Sheet :open="!!addFor" :title="addFor ? `加入行程：${addFor.title}` : ''" @update:open="v => !v && (addFor = null)">
-      <div class="px-2 pb-2">
+      <div class="px-3 pb-2">
         <p class="mb-2 mt-1 text-[13px] font-semibold">日期</p>
         <div class="flex flex-wrap gap-2">
           <button v-for="d in days" :key="d.date" :class="['chip-region', addTo?.date === d.date && 'on']"
@@ -402,7 +406,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
 
     <!-- 篩選抽屜：chips 換行並排，不橫向捲動 -->
     <Sheet v-model:open="filterOpen" title="篩選">
-      <div class="px-2 pb-2">
+      <div class="px-3 pb-2">
         <template v-if="activeFilters.length">
           <h3 class="mb-2 mt-2 text-[15px] font-semibold">已選</h3>
           <div class="flex flex-wrap gap-2">

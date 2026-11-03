@@ -7,6 +7,7 @@ import * as api from './api'
 import { WEEK, parseDate, todayISO, addDays, coversDate, tripPast } from './date-rules'
 import { imagePaths, unusedPaths } from './image-rules'
 import { getSnapshot, setSnapshot, delSnapshot } from './offline-cache'
+import { DEFAULT_PACKING, fromTemplate, progress, subtree } from './packing-rules'
 import { fmtHours } from './hours-rules'
 import { sb, isConfigured, signIn as authSignIn, signUp as authSignUp, signOut as authSignOut } from './supabase'
 
@@ -85,7 +86,7 @@ watch(() => theme.v, v => {
 }, { immediate: true })
 
 // ---- store 本體
-const empty = () => ({ users: [], trips: [], members: [], regions: [], tags: [], items: [], invites: [], entries: [], days: [], expenses: [] })
+const empty = () => ({ users: [], trips: [], members: [], regions: [], tags: [], items: [], invites: [], entries: [], days: [], expenses: [], packing: [] })
 export const store = reactive({
   me: null,          // 目前登入者的 id
   ready: false,      // 第一次載入完成前，頁面顯示載入中
@@ -1175,4 +1176,65 @@ export async function fetchPreview(url) {
     throw new Error(body.error === 'blocked' ? 'blocked' : 'unreachable')
   }
   return res.json()
+}
+
+// ---- 行李清單（v2.15.0）----
+// 只有本人看得到（RLS，別人的根本不會載進來）。樹的純函式在 packing-rules.js。
+// 寫入都要網路：打包通常在家裡，離線排隊的複雜度不值得
+export { MAX_DEPTH, DEFAULT_PACKING, fromTemplate, cloneNodes } from './packing-rules'
+export const packNodes = tripId => store.packing.filter(n => n.tripId === tripId && n.ownerUserId === store.me)
+export const packChildren = (tripId, parentId) => packNodes(tripId).filter(n => n.parentId === parentId).sort((a, b) => a.order - b.order)
+export const packProgress = (tripId, groupId = null) => progress(packNodes(tripId), groupId)
+// 「從其他旅程複製」的來源：我在別趟有清單的旅程，近的在前
+export const packSources = tripId => store.trips
+  .filter(t => t.id !== tripId && !t.deletedAt && packNodes(t.id).length)
+  .sort((a, b) => (b.start || '').localeCompare(a.start || ''))
+const needOnline = () => (store.offline ? (toast('需要網路'), false) : true)
+function setPacking(tripId, nodes) {
+  store.packing = store.packing.filter(n => !(n.tripId === tripId && n.ownerUserId === store.me)).concat(nodes)
+}
+
+// 第一次打開才放預設清單。真正「有沒有初始化過」記在後端（packing_lists）：
+// 使用者刪光了不會又被塞回來，兩台裝置同時打開也只會有一份。這裡只擋同一次開 app 重複呼叫
+export const packInit = reactive(new Set())
+export function ensurePacking(tripId) {
+  if (store.offline || packNodes(tripId).length || packInit.has(tripId)) return
+  packInit.add(tripId)
+  push(async () => setPacking(tripId, await api.initPacking(tripId, fromTemplate(DEFAULT_PACKING, uid))))
+    .finally(() => packInit.delete(tripId))
+}
+// 整份換掉（從其他旅程複製、恢復預設）。nodes 由呼叫端用 fromTemplate / cloneNodes 算好
+export function replacePacking(tripId, nodes) {
+  if (!needOnline()) return
+  const before = packNodes(tripId)
+  setPacking(tripId, nodes.map(n => ({ ...n, tripId, ownerUserId: store.me, packed: false })))
+  push(async () => setPacking(tripId, await api.replacePacking(tripId, nodes)), () => setPacking(tripId, before))
+}
+export function addPack(tripId, parentId, kind, title) {
+  if (!needOnline() || !title.trim()) return
+  const siblings = packChildren(tripId, parentId)
+  const n = { id: uid(), tripId, ownerUserId: store.me, parentId, kind, title: title.trim(), qty: null, packed: false,
+    order: siblings.length ? siblings.at(-1).order + 1 : 0 }
+  store.packing.push(n)
+  push(() => api.createPack(n), () => { store.packing = store.packing.filter(x => x.id !== n.id) })
+}
+export function updatePack(n, patch) {
+  if (!needOnline()) return
+  const before = Object.fromEntries(Object.keys(patch).map(k => [k, n[k]]))
+  Object.assign(n, patch)
+  push(() => api.updatePack(n.id, patch), () => Object.assign(n, before))
+}
+// 刪掉的物品放回去（「復原」）：同一個 id、同一個位置、打勾也照舊。群組有子孫，不走這條
+export function restorePack(n) {
+  if (!needOnline()) return
+  store.packing.push(n)
+  push(() => api.createPack(n), () => { store.packing = store.packing.filter(x => x.id !== n.id) })
+}
+// 刪群組連子孫一起（資料庫是 on delete cascade，本地做同一件事）
+export function deletePack(n) {
+  if (!needOnline()) return
+  const ids = subtree(store.packing, n.id)
+  const removed = store.packing.filter(x => ids.has(x.id))
+  store.packing = store.packing.filter(x => !ids.has(x.id))
+  push(() => api.deletePack(n.id), () => { store.packing = store.packing.concat(removed) })
 }

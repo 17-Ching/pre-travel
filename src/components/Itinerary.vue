@@ -614,7 +614,7 @@ const addFor = ref(null)
 
     <!-- 新增 / 編輯表單（F-38、F-39、F-40） -->
     <Sheet :open="!!formFor" :title="formFor?.entry ? '編輯' : isFlight ? '加航班' : isStay ? '加住宿' : form.kind === 'transport' ? '加一段交通' : '新增'" @update:open="v => !v && (formFor = null)">
-      <div class="grid gap-3 px-2 pb-2">
+      <div class="grid gap-3 px-3 pb-2">
         <!-- 航線與交通路線都拆兩格，箭頭由系統補上：使用者反映在電腦上打「→」很麻煩 -->
         <div v-if="isRoute && !editingRef">
           <span class="label">{{ isFlight ? '航線' : '路線' }}</span>
@@ -799,7 +799,7 @@ const addFor = ref(null)
 
     <!-- 搬到其他天／時段（取代跨日拖曳） -->
     <Sheet :open="!!moveFor" title="搬到" @update:open="v => !v && (moveFor = null)">
-      <div class="px-2 pb-2">
+      <div class="px-3 pb-2">
         <p class="mb-2 mt-1 text-[13px] font-semibold">日期</p>
         <!-- 選了只是選起來，真的搬要按下面那顆 -->
         <div class="flex flex-wrap gap-2">
@@ -838,7 +838,7 @@ const addFor = ref(null)
     <!-- 住宿 → 某天的時段。跟「搬到」一樣是選好再按確定，不要點了就送出 -->
     <Sheet :open="!!stayInto" :title="stayInto ? `加到時段：${entryTitle(stayInto)}` : ''"
       @update:open="v => !v && (stayInto = null)">
-      <div class="px-2 pb-2">
+      <div class="px-3 pb-2">
         <p class="mb-2 mt-1 text-[13px] font-semibold">日期</p>
         <div class="flex flex-wrap gap-2">
           <button v-for="d in days" :key="d.date"
@@ -863,7 +863,7 @@ const addFor = ref(null)
 
     <!-- F-41 從清單選地點，可多選 -->
     <Sheet :open="!!pickFor" title="從清單選地點" @update:open="v => !v && (pickFor = null)">
-      <div class="px-2 pb-2">
+      <div class="px-3 pb-2">
         <input v-model="pickQuery" class="input" placeholder="搜尋地點" />
         <div class="mt-2 flex flex-wrap gap-2">
           <button :class="['chip-region', pickRegion === 'all' && 'on']" @click="pickRegion = 'all'">全部</button>
@@ -898,7 +898,7 @@ const addFor = ref(null)
 
     <!-- 從參考加入當天的連結。疊在每日備註的抽屜上面，選完回到備註繼續編輯 -->
     <Sheet v-model:open="refPicking" title="從參考加入">
-      <div class="px-2 pb-2">
+      <div class="px-3 pb-2">
         <input v-model="refQuery" class="input" placeholder="搜尋參考" />
         <p v-if="!refItems.length" class="py-6 text-center text-[13px] text-muted">{{ refQuery ? '沒有符合的參考' : '願望清單的「參考」裡還沒有東西' }}</p>
         <ul v-else class="mt-3 grid gap-1.5">
@@ -929,7 +929,7 @@ const addFor = ref(null)
 
     <!-- 每日備註編輯 -->
     <Sheet v-model:open="noteOpen" title="這天的備註">
-      <div class="grid gap-3 px-2 pb-2">
+      <div class="grid gap-3 px-3 pb-2">
         <textarea v-model="noteDraft" class="input h-32 resize-y py-2.5" maxlength="500" placeholder="住哪間飯店、天氣、下雨備案…" aria-label="備註" />
         <!-- 這天要拍的參考（引用願望清單的參考，照片與連結跟著參考走） -->
         <div>

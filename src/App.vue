@@ -2,7 +2,8 @@
 import { useRouter } from 'vue-router'
 import { store } from './store'
 const router = useRouter()
-function act() { router.push(store.toast.action.to); store.toast = null }
+// action 有 to 就換頁，有 run 就直接做（例：刪除後的「復原」）
+function act() { const a = store.toast.action; a.run ? a.run() : router.push(a.to); store.toast = null }
 </script>
 
 <template>

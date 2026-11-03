@@ -8,6 +8,7 @@ import { addDays, daysBetween, coversDate, stayNights, stayDayLabel, tripPast } 
 import { imagePaths, unusedPaths } from '../src/image-rules.js'
 import { cleanHours, fmtHours } from '../src/hours-rules.js'
 import { splitEven, debts, totals, fmtMoney, byCategory, categoryOf } from '../src/expense-rules.js'
+import { fromTemplate, cloneNodes, progress, subtree } from '../src/packing-rules.js'
 import { readFileSync } from 'node:fs'
 import { CHANGELOG } from '../src/changelog.js'
 
@@ -202,6 +203,26 @@ assert.equal(fmtHours([{ open: '18:00', close: '02:00' }], null), '18:00–02:00
 assert.equal(fmtHours([], 'none'), '全年無休')
 assert.equal(fmtHours([], null), '', '什麼都沒填就整列不顯示')
 assert.equal(fmtHours(undefined, undefined), '', 'migration 前的舊資料')
+
+// ── 行李清單：預設展開、複製換新 id 且父子對得上、打勾清掉、進度只算物品、刪群組連子孫
+{
+  let n = 0
+  const id = () => `n${++n}`
+  const tpl = fromTemplate([['A', [['B', ['x', 'y']], 'z']], 'w'], id)
+  assert.deepEqual(tpl.map(x => [x.title, x.kind, tpl.find(p => p.id === x.parentId)?.title ?? null]),
+    [['A', 'group', null], ['B', 'group', 'A'], ['x', 'item', 'B'], ['y', 'item', 'B'], ['z', 'item', 'A'], ['w', 'item', null]])
+  const src = tpl.map(x => ({ ...x, packed: x.title === 'x' }))
+  const copy = cloneNodes(src, id)
+  assert.equal(copy.length, src.length)
+  assert.ok(copy.every(c => !src.some(s => s.id === c.id)), '複製要換新 id')
+  assert.ok(copy.every(c => !c.parentId || copy.some(p => p.id === c.parentId)), '父節點要指向新的那份')
+  assert.ok(copy.every((c, i) => !c.parentId || copy.findIndex(p => p.id === c.parentId) < i), '父節點排在子節點前面')
+  assert.ok(copy.every(c => !('packed' in c)), '複製過來的打勾要清掉')
+  const A = src.find(x => x.title === 'A').id
+  assert.deepEqual(progress(src, A), { done: 1, total: 3 }, '群組本身不算，子群組的物品要算進來')
+  assert.deepEqual(progress(src, null), { done: 1, total: 4 })
+  assert.equal(subtree(src, A).size, 5, '刪 A 要連 B、x、y、z 一起')
+}
 
 // ── 版本號與更新紀錄。畫面上的版本號吃 package.json，點開看到的是 changelog，
 // 兩份是分開手改的 —— 改了一邊忘了另一邊，使用者就會看到「v2.2.0」點開最新一筆卻是 2.1.0。

@@ -112,6 +112,14 @@ const expenseRow = e => ({
   category: e.category ?? 'other',
 })
 
+// 行李清單：本人限定（RLS），跨所有旅程都會載進來，「從其他旅程複製」要用
+const toPack = r => ({
+  id: r.id, tripId: r.trip_id, ownerUserId: r.owner_user_id, parentId: r.parent_id ?? null,
+  kind: r.kind, title: r.title, qty: r.qty ?? null, packed: r.packed, order: r.sort_order,
+})
+// RPC 收的那包：trip、本人、打勾由函式自己填，不送
+const packPayload = nodes => nodes.map(n => ({ id: n.id, parent_id: n.parentId, kind: n.kind, title: n.title.trim().slice(0, 100), qty: n.qty ?? null, sort_order: n.order ?? 0 }))
+
 const toDay = r => ({ tripId: r.trip_id, date: r.date, note: r.note ?? '', links: r.links ?? [], refIds: r.ref_ids ?? [], updatedBy: r.updated_by, updatedAt: r.updated_at })
 
 // 寫回資料庫時只留欄位本身，畫面加上去的東西（簽名網址）要剝掉
@@ -137,7 +145,7 @@ const itemRow = i => ({
 // 頁面繼續用同步的方式讀。RLS 已經把範圍限制在他參與的專案裡，
 // 朋友等級的資料量這樣最省事，也直接鋪好離線快取（F-32）的路。
 export async function loadAll() {
-  const [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days, expenses, shares] = await Promise.all([
+  const [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days, expenses, shares, packing] = await Promise.all([
     sb().from('profiles').select('*'),
     sb().from('trips').select('*'),
     sb().from('trip_members').select('*'),
@@ -150,13 +158,14 @@ export async function loadAll() {
     sb().from('trip_days').select('*'),
     sb().from('expenses').select('*'),
     sb().from('expense_shares').select('*'),
+    sb().from('packing_nodes').select('*'),
   ])
   // 記帳的表還沒建（migration 還沒跑）時不要把整個 app 拖垮，當成沒有帳就好。
   // 只放過「表不存在」，權限之類的錯誤照樣要報出來。
-  for (const r of [expenses, shares]) {
+  for (const r of [expenses, shares, packing]) {
     if (r.error && /PGRST205|42P01/.test(r.error.code)) Object.assign(r, { error: null, data: [] })
   }
-  for (const r of [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days, expenses, shares]) {
+  for (const r of [profiles, trips, members, regions, tags, items, itemTags, invites, entries, days, expenses, shares, packing]) {
     if (r.error) throw new Error('載入資料失敗：' + r.error.message)
   }
 
@@ -179,6 +188,7 @@ export async function loadAll() {
     entries: entries.data.map(toEntry),
     days: days.data.map(toDay),
     expenses: ledger,
+    packing: packing.data.map(toPack),
   }
 }
 
@@ -467,4 +477,35 @@ export async function setMemberStatus(tripId, userId, status) {
   must(await sb().from('trip_members')
     .update({ status, left_at: status === 'left' ? new Date().toISOString() : null })
     .eq('trip_id', tripId).eq('user_id', userId).select(), '更新成員')
+}
+
+// ---- 行李清單 ----
+export async function createPack(n) {
+  must(await sb().from('packing_nodes').insert({
+    id: n.id, trip_id: n.tripId, owner_user_id: n.ownerUserId, parent_id: n.parentId,
+    kind: n.kind, title: n.title.trim().slice(0, 100), qty: n.qty ?? null, sort_order: n.order ?? 0,
+    packed: Boolean(n.packed),   // 平常是 false；「復原」放回去時照原本的
+  }).select(), '新增行李項目')
+}
+export async function updatePack(id, patch) {
+  const row = {}
+  if ('title' in patch) row.title = patch.title.trim().slice(0, 100)
+  if ('qty' in patch) row.qty = patch.qty ?? null
+  if ('packed' in patch) row.packed = patch.packed
+  must(await sb().from('packing_nodes').update(row).eq('id', id).select(), '更新行李項目')
+}
+export async function deletePack(id) {
+  must(await sb().from('packing_nodes').delete().eq('id', id).select(), '刪除行李項目')
+}
+// 第一次打開：還沒初始化過才放預設清單（後端用記號擋重複），回傳我在這趟的全部
+export async function initPacking(tripId, nodes) {
+  const { data, error } = await sb().rpc('init_packing', { p_trip: tripId, p_nodes: packPayload(nodes) })
+  if (error) throw new Error('建立行李清單失敗：' + error.message)
+  return data.map(toPack)
+}
+// 整份換掉（從其他旅程複製、恢復預設）
+export async function replacePacking(tripId, nodes) {
+  const { data, error } = await sb().rpc('replace_packing', { p_trip: tripId, p_nodes: packPayload(nodes) })
+  if (error) throw new Error('取代行李清單失敗：' + error.message)
+  return data.map(toPack)
 }
