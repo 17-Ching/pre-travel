@@ -1,7 +1,11 @@
 // Supabase 存取層。只負責「送出請求」與「欄位轉換」，不碰畫面狀態。
 // 資料庫是 snake_case，畫面用 camelCase，轉換全部集中在這裡，其他檔案看不到 snake_case。
 import { sb } from './supabase'
-import { cleanHours } from './hours-rules'
+import { cleanHours, cleanClosed } from './hours-rules'
+
+// 公休日 v2.15.1 從單選（closed_day）改成可以好幾天（closed_days，not null，舊資料 migration 已回填）。
+// 舊的 closed_day 欄位還留著一版，前端不讀也不寫
+const closedDaysOf = r => cleanClosed(r.closed_days)
 
 // RLS 擋 UPDATE / DELETE 時不會報錯，只是靜默影響 0 筆。
 // 所以每個寫入都要 .select() 回來數筆數，沒有 error 不等於成功。
@@ -39,7 +43,7 @@ const toItem = r => ({
   createdAt: r.created_at, updatedAt: r.updated_at,
   pinnedAt: r.pinned_at ?? null,   // 參考的置頂。itemRow 刻意不寫它，只有 patchItem 會動
   // 營業時間（地點）：時段陣列＋公休日，見 hours-rules.js。Array.isArray 是為了 migration 前後的舊形狀
-  hours: Array.isArray(r.hours) ? r.hours : [], closedDay: r.closed_day ?? null,
+  hours: Array.isArray(r.hours) ? r.hours : [], closedDays: closedDaysOf(r),
   station: r.station ?? '',   // 最近車站（地點）
 })
 
@@ -58,7 +62,7 @@ const toEntry = r => ({
   images: r.images ?? [],
   files: r.files ?? [],
   regionId: r.region_id ?? null,
-  hours: Array.isArray(r.hours) ? r.hours : [], closedDay: r.closed_day ?? null,
+  hours: Array.isArray(r.hours) ? r.hours : [], closedDays: closedDaysOf(r),
   station: r.station ?? '',
   detachedAt: r.detached_at,
   createdBy: r.created_by, updatedBy: r.updated_by,
@@ -73,7 +77,7 @@ const filesRow = files => (files ?? []).map(({ path, name, size }) => ({ path, n
 
 const entryRow = e => ({
   trip_id: e.tripId,
-  hours: cleanHours(e.hours), closed_day: e.closedDay ?? null,
+  hours: cleanHours(e.hours), closed_days: cleanClosed(e.closedDays),
   station: (e.station ?? '').trim().slice(0, 50),
   date: e.date,
   end_date: e.kind === 'stay' ? e.endDate : null,
@@ -136,7 +140,7 @@ const itemRow = i => ({
   visited: Boolean(i.visited),
   purchase_status: i.status ?? 'todo',
   planned_store: (i.plannedStore ?? '').slice(0, 100),
-  hours: cleanHours(i.hours), closed_day: i.closedDay ?? null,
+  hours: cleanHours(i.hours), closed_days: cleanClosed(i.closedDays),
   station: (i.station ?? '').trim().slice(0, 50),
 })
 
@@ -349,7 +353,7 @@ export async function patchItem(id, patch) {
   if ('status' in patch) row.purchase_status = patch.status
   if ('pinnedAt' in patch) row.pinned_at = patch.pinnedAt
   if ('hours' in patch) row.hours = cleanHours(patch.hours)
-  if ('closedDay' in patch) row.closed_day = patch.closedDay ?? null
+  if ('closedDays' in patch) row.closed_days = cleanClosed(patch.closedDays)
   if ('station' in patch) row.station = (patch.station ?? '').trim().slice(0, 50)
   const rows = must(await sb().from('items').update(row).eq('id', id).select(), '更新狀態')
   return toItem(rows[0])
@@ -382,7 +386,7 @@ export async function updateEntry(id, patch) {
   if ('files' in patch) row.files = filesRow(patch.files)
   if ('regionId' in patch) row.region_id = patch.regionId || null
   if ('hours' in patch) row.hours = cleanHours(patch.hours)
-  if ('closedDay' in patch) row.closed_day = patch.closedDay ?? null
+  if ('closedDays' in patch) row.closed_days = cleanClosed(patch.closedDays)
   if ('station' in patch) row.station = (patch.station ?? '').trim().slice(0, 50)
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done

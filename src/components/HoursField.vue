@@ -1,14 +1,22 @@
 <script setup>
 import { PhX, PhPlus } from '@phosphor-icons/vue'
-import { MAX_RANGES, CLOSED_DAYS } from '../hours-rules'
+import { MAX_RANGES, CLOSED_DAYS, cleanClosed } from '../hours-rules'
 import TimeField from './TimeField.vue'
 
-// 營業時間欄：好幾段「開始–結束」＋公休日下拉。清單表單與行程表單共用。
-// hours 陣列由呼叫端擁有，這裡直接改它；公休日是單一值，用 v-model:closed-day 傳回去。
+// 營業時間欄：好幾段「開始–結束」＋公休日。清單表單與行程表單共用。
+// hours 陣列由呼叫端擁有，這裡直接改它；公休日用 v-model:closed-days 傳回去。
 // 存檔前呼叫端要過 cleanHours：只填一格的時段這裡不擋，讓使用者可以先填一半。
-const props = defineProps({ hours: Array, closedDay: String })
-const emit = defineEmits(['update:closedDay'])
+const props = defineProps({ hours: Array, closedDays: Array })
+const emit = defineEmits(['update:closedDays'])
 const add = () => { if (props.hours.length < MAX_RANGES) props.hours.push({ open: '', close: '' }) }
+
+// 公休日可以選好幾天（有些店一週休兩天）。「無」跟星期幾互斥：點了無就清掉星期幾，點了星期幾就清掉無
+const on = k => (props.closedDays ?? []).includes(k)
+function toggleDay(k) {
+  const days = props.closedDays ?? []
+  if (k === 'none') return emit('update:closedDays', on('none') ? [] : ['none'])
+  emit('update:closedDays', cleanClosed(on(k) ? days.filter(d => d !== k) : [...days.filter(d => d !== 'none'), k]))
+}
 </script>
 
 <template>
@@ -26,11 +34,11 @@ const add = () => { if (props.hours.length < MAX_RANGES) props.hours.push({ open
       <PhPlus :size="16" weight="bold" />{{ hours.length ? '再加一段（中間休息）' : '新增營業時段' }}
     </button>
 
-    <label class="label mt-3" for="closed-day">公休日（選填）</label>
-    <!-- 「請選擇」＝沒選，存成 null，畫面不顯示；「無」存成 'none'，顯示全年無休 -->
-    <select id="closed-day" class="input" :value="closedDay ?? ''" @change="e => emit('update:closedDay', e.target.value || null)">
-      <option value="">請選擇</option>
-      <option v-for="[k, l] in CLOSED_DAYS" :key="k" :value="k">{{ l }}</option>
-    </select>
+    <!-- 都不選＝沒填，畫面不顯示；「無」顯示全年無休 -->
+    <span class="label mt-3">公休日（選填，可以選好幾天）</span>
+    <div class="flex flex-wrap gap-1.5" role="group" aria-label="公休日">
+      <button v-for="[k, l] in CLOSED_DAYS" :key="k" type="button" :aria-pressed="on(k)"
+        :class="['chip-state h-8 px-3 text-[14px]', on(k) && 'on']" @click="toggleDay(k)">{{ l }}</button>
+    </div>
   </div>
 </template>

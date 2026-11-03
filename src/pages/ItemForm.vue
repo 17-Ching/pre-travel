@@ -30,7 +30,7 @@ const f = ref(existing ? JSON.parse(JSON.stringify(existing)) : {
   // v2.0：共同分頁移除（Q8），項目一定進自己的清單分頁
   tripId, type, ownerUserId: store.me,
   title: '', links: [newLink()], regionId: qRegion && qRegion !== 'all' && qRegion !== 'none' ? qRegion : null,
-  images: [], note: '', visited: false, status: 'todo', plannedStore: '', hours: [], closedDay: null, station: '', tagIds: [],
+  images: [], note: '', visited: false, status: 'todo', plannedStore: '', hours: [], closedDays: [], station: '', tagIds: [],
 })
 
 const regions = computed(() => regionsOf(tripId))
@@ -113,7 +113,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
     </div>
 
     <!-- 營業時間：手動輸入。Google Maps / Naver 的網址抓不到（Google 要付費 API、Naver 沒有公開 API） -->
-    <HoursField v-if="type === 'place'" v-model:closed-day="f.closedDay" :hours="f.hours" />
+    <HoursField v-if="type === 'place'" v-model:closed-days="f.closedDays" :hours="f.hours" />
 
     <template v-if="isBuy(type)">
       <div>

@@ -13,7 +13,7 @@ import ImagePicker from './ImagePicker.vue'
 import FilePicker from './FilePicker.vue'
 import HoursField from './HoursField.vue'
 import TimeField from './TimeField.vue'
-import { cleanHours } from '../hours-rules'
+import { cleanHours, cleanClosed } from '../hours-rules'
 import ImageZoom from './ImageZoom.vue'
 import LinkFields from './LinkFields.vue'
 
@@ -114,7 +114,7 @@ const addNoteDesc = d => (noteDraft.value = (noteDraft.value ? noteDraft.value +
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
 const ARROW = ' → '
 const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [],
-  passengerIds: [], images: [], files: [], regionId: '', hours: [], closedDay: null, station: '', startDate: '', endDate: '', from: '', to: '' })
+  passengerIds: [], images: [], files: [], regionId: '', hours: [], closedDays: [], station: '', startDate: '', endDate: '', from: '', to: '' })
 const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
 const MODES = ['步行', '電車', '巴士', '計程車', '開車', '飛機', '船']
@@ -145,7 +145,7 @@ function openEdit(entry) {
     startDate: entry.date, endDate: entry.endDate || '', from, to }
   formFor.value = { entry }
 }
-const hoursOf = x => ({ hours: JSON.parse(JSON.stringify(x?.hours ?? [])), closedDay: x?.closedDay ?? null })
+const hoursOf = x => ({ hours: JSON.parse(JSON.stringify(x?.hours ?? [])), closedDays: cleanClosed(x?.closedDays) })
 const editingRef = computed(() => Boolean(formFor.value?.entry?.itemId)) // 引用的項目標題不可改（F-38）
 // 引用自己清單的地點：營業時間是店家本身的事，同一間店只留一份，在這裡改是寫回清單項目。
 // 別人清單的項目不能改（items_update 的 RLS），所以標題、營業時間存在行程這一筆，蓋過清單的值；
@@ -211,7 +211,7 @@ function submitForm() {
     images: hasImages.value ? f.images : [],
     regionId: hasRegion.value ? f.regionId || null : null,
     // 引用清單的那筆預設存空的，畫面讀清單項目的；引用別人清單的覆寫見下面
-    hours: hasRegion.value ? cleanHours(f.hours) : [], closedDay: hasRegion.value ? f.closedDay : null,
+    hours: hasRegion.value ? cleanHours(f.hours) : [], closedDays: hasRegion.value ? cleanClosed(f.closedDays) : [],
     station: hasRegion.value ? f.station.trim() : '',
     files: hasFiles.value ? f.files : [],
     // 住宿是唯一自己帶日期區間的：編輯時連入住日一起改，不走「搬到其他天」
@@ -220,7 +220,7 @@ function submitForm() {
   // 營業時間、最近車站：只送有變的欄位，跟清單一樣的不寫
   const it = refItem.value, changed = {}
   if (it) {
-    const hours = { hours: cleanHours(f.hours), closedDay: f.closedDay }
+    const hours = { hours: cleanHours(f.hours), closedDays: cleanClosed(f.closedDays) }
     if (!sameHours(hours, it)) Object.assign(changed, hours)
     if (f.station.trim() !== (it.station ?? '')) changed.station = f.station.trim()
   }
@@ -709,7 +709,7 @@ const addFor = ref(null)
         <FilePicker v-if="formFor && hasFiles" :files="form.files" :trip-id="tripId" />
 
         <!-- 放在備註正上方，跟抽屜裡的順序一樣。引用自己清單的寫回清單，引用別人的存在行程這一筆 -->
-        <HoursField v-if="hasRegion || refItem?.type === 'place'" v-model:closed-day="form.closedDay" :hours="form.hours" />
+        <HoursField v-if="hasRegion || refItem?.type === 'place'" v-model:closed-days="form.closedDays" :hours="form.hours" />
 
         <div>
           <label class="label" for="e-note">備註（選填）</label>
