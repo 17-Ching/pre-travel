@@ -367,6 +367,45 @@ create table if not exists public.expense_shares (
   primary key (expense_id, user_id)
 );
 
+-- 行李清單（v2.15.0）。每個人在每趟有自己的一份，連同行的成員都看不到 ——
+-- 這跟 gift 項目是同一種隱私，但更徹底：gift 還在共用的 items 表裡靠 policy 擋，
+-- 行李是整張表都只有本人。
+--
+-- 樹狀用 parent_id 自我參照，不用 ltree 或路徑字串：前端限 3 層，整趟的節點數
+-- 是幾十筆，一次全撈回去在記憶體裡組樹就好，不需要遞迴查詢。
+-- on delete cascade 讓「刪掉群組」自動帶走子孫，不用前端自己收。
+create table if not exists public.packing_nodes (
+  id            uuid primary key default gen_random_uuid(),
+  trip_id       uuid not null references public.trips on delete cascade,
+  owner_user_id uuid not null references public.profiles on delete cascade default auth.uid(),
+  -- null = 最外層。父子關係的三個一致性條件（父必須是群組、同一趟、同一人）
+  -- 靠觸發器擋，不是 FK —— FK 只保證「指到一個存在的節點」。
+  parent_id     uuid references public.packing_nodes on delete cascade,
+  kind          text not null check (kind in ('group', 'item')),
+  title         text not null check (char_length(btrim(title)) between 1 and 100),
+  -- 只有 item 用得到。group 一律 null / false，靠下面的 CHECK 擋，
+  -- 不然「群組上的數量」會是一個永遠不顯示、卻會被複製來複製去的幽靈值。
+  qty           int check (qty between 1 and 99),
+  packed        boolean not null default false,
+  sort_order    int not null default 0,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  constraint packing_group_has_no_qty check (kind = 'item' or (qty is null and packed = false)),
+  -- 自己不能是自己的父節點。更長的環（A→B→A）這裡擋不掉，
+  -- 但那要前端刻意送出才會發生，而且不會讓資料外洩，不值得為它加遞迴檢查。
+  constraint packing_no_self_parent check (parent_id is null or parent_id <> id)
+);
+
+-- 「這個人在這趟已經初始化過預設清單」的記號。沒有它的話，使用者把清單刪光、
+-- 重新進頁面就會又被塞回一份預設 —— 刪不掉的清單。
+-- 主鍵同時擋住兩台裝置同時初始化塞兩份（init_packing 靠 on conflict do nothing 判斷）。
+create table if not exists public.packing_lists (
+  trip_id    uuid not null references public.trips on delete cascade,
+  user_id    uuid not null references public.profiles on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (trip_id, user_id)
+);
+
 create index if not exists items_trip_idx        on public.items (trip_id);
 create index if not exists items_owner_idx       on public.items (trip_id, owner_user_id, type);
 create index if not exists members_user_idx      on public.trip_members (user_id);
@@ -387,6 +426,10 @@ alter table public.expenses add constraint expenses_category_check
 create index if not exists expenses_trip_idx     on public.expenses (trip_id, kind, date);
 create index if not exists expenses_owner_idx    on public.expenses (trip_id, owner_user_id);
 create index if not exists expense_shares_user_idx on public.expense_shares (user_id);
+-- loadAll 撈的是「我的全部行李」（跨所有旅程，「從其他旅程複製」要用），
+-- 所以索引以 owner 開頭，不是 trip
+create index if not exists packing_owner_idx     on public.packing_nodes (owner_user_id, trip_id, sort_order);
+create index if not exists packing_parent_idx    on public.packing_nodes (parent_id);
 
 -- ---------- 2. 觸發器 ----------
 
@@ -517,6 +560,37 @@ drop trigger if exists itinerary_sync_visited on public.itinerary_entries;
 create trigger itinerary_sync_visited after update on public.itinerary_entries
   for each row execute function public.sync_visited_on_done();
 
+-- 行李節點的父子一致性（v2.15.0）。FK 只保證 parent_id 指到一個存在的節點，
+-- 擋不住「掛到物品底下」「掛到別趟的群組」「掛到別人的群組」這三件事。
+--
+-- 第三件特別重要：行李是整張表只有本人看得到，但 FK 不看 owner。
+-- 沒有這個檢查的話，知道別人節點 id 的人可以把自己的節點掛上去 —— 讀不到對方的
+-- 資料，但 on delete cascade 會讓對方刪群組時連帶刪掉你的東西。
+--
+-- security definer：parent 那一列可能不屬於呼叫者（正是要擋的情況），
+-- 用 invoker 的話 RLS 會先把它濾掉，查出來是 null，三個檢查全部落空。
+create or replace function public.check_packing_parent()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare p record;
+begin
+  if new.parent_id is null then return new; end if;
+  select kind, trip_id, owner_user_id into p
+  from public.packing_nodes where id = new.parent_id;
+  if not found then raise exception 'packing_parent_not_found'; end if;
+  if p.kind <> 'group' then raise exception 'packing_parent_not_group'; end if;
+  if p.trip_id <> new.trip_id then raise exception 'packing_parent_other_trip'; end if;
+  if p.owner_user_id <> new.owner_user_id then raise exception 'packing_parent_other_owner'; end if;
+  return new;
+end $$;
+
+drop trigger if exists packing_nodes_parent_check on public.packing_nodes;
+create trigger packing_nodes_parent_check before insert or update on public.packing_nodes
+  for each row execute function public.check_packing_parent();
+
+drop trigger if exists packing_nodes_touch on public.packing_nodes;
+create trigger packing_nodes_touch before update on public.packing_nodes
+  for each row execute function public.touch_updated_at();
+
 -- ---------- 3. 權限判斷函式 ----------
 -- 全部 security definer：它們自己讀表時繞過 RLS，否則 policy 互相引用會無限遞迴。
 
@@ -607,6 +681,8 @@ alter table public.itinerary_entries enable row level security;
 alter table public.trip_days         enable row level security;
 alter table public.expenses          enable row level security;
 alter table public.expense_shares    enable row level security;
+alter table public.packing_nodes     enable row level security;
+alter table public.packing_lists     enable row level security;
 
 -- 讓整份檔案可以重跑：先清掉既有 policy
 do $$
@@ -615,7 +691,7 @@ begin
   for r in
     select policyname, tablename from pg_policies
     where schemaname = 'public'
-      and tablename in ('profiles','trips','trip_members','invites','regions','tags','items','item_tags','itinerary_entries','trip_days','expenses','expense_shares')
+      and tablename in ('profiles','trips','trip_members','invites','regions','tags','items','item_tags','itinerary_entries','trip_days','expenses','expense_shares','packing_nodes','packing_lists')
   loop
     execute format('drop policy %I on public.%I', r.policyname, r.tablename);
   end loop;
@@ -748,6 +824,19 @@ create policy expense_shares_update on public.expense_shares for update
   using (public.can_touch_share(expense_id)) with check (public.can_touch_share(expense_id));
 create policy expense_shares_delete on public.expense_shares for delete
   using (public.can_touch_share(expense_id));
+
+-- 行李清單（v2.15.0）：只有本人。兩張表的四個動作都是同一句判斷，
+-- 所以用 for all 一條帶過，不像其他表要分讀寫。
+--
+-- 除了 owner 還要 is_trip_member：離開專案之後行李就讀不到了。這跟個人帳
+-- （expenses 的 personal，離開後仍讀得到自己的舊帳）不一樣，是刻意的 ——
+-- 舊帳是「誰欠誰錢」的紀錄，離開後還要對帳；行李是這趟的待辦，沒去就沒意義。
+create policy packing_nodes_all on public.packing_nodes for all
+  using (owner_user_id = auth.uid() and public.is_trip_member(trip_id))
+  with check (owner_user_id = auth.uid() and public.is_trip_member(trip_id));
+create policy packing_lists_all on public.packing_lists for all
+  using (user_id = auth.uid() and public.is_trip_member(trip_id))
+  with check (user_id = auth.uid() and public.is_trip_member(trip_id));
 
 -- ---------- 5. RPC ----------
 
@@ -905,6 +994,88 @@ begin
   on conflict (expense_id, user_id) do update set
     amount  = excluded.amount,
     settled = excluded.settled;
+end $$;
+
+-- 行李清單的兩支 RPC（v2.15.0）。都是 security invoker：寫入照樣要過
+-- packing_nodes_all，所以函式裡不用再檢查一次「是不是本人、是不是成員」。
+-- trip_id / owner_user_id / packed 一律由函式自己填，不讀 payload 裡的值 ——
+-- 呼叫端送什麼都不影響，少一個可以塞進別人清單的入口。
+--
+-- 父節點一定排在子節點前面（前端保證），所以照陣列順序插入時
+-- check_packing_parent 查得到父節點。這份順序是契約的一部分，
+-- 倒過來送會在第一個子節點就 packing_parent_not_found。
+create or replace function public.insert_packing_nodes(p_trip uuid, p_nodes jsonb)
+returns void language plpgsql set search_path = public as $$
+declare n jsonb;
+begin
+  for n in select value from jsonb_array_elements(coalesce(p_nodes, '[]'::jsonb)) loop
+    insert into public.packing_nodes
+      (id, trip_id, owner_user_id, parent_id, kind, title, qty, packed, sort_order)
+    values (
+      coalesce((n ->> 'id')::uuid, gen_random_uuid()),
+      p_trip, auth.uid(),
+      (n ->> 'parent_id')::uuid,
+      n ->> 'kind',
+      n ->> 'title',
+      -- 群組不留數量：前端送了也丟掉，不然那個值會一路被複製下去
+      case when n ->> 'kind' = 'item' then (n ->> 'qty')::int end,
+      false,
+      coalesce((n ->> 'sort_order')::int, 0));
+  end loop;
+end $$;
+
+-- 第一次打開行李頁時放一份預設清單。已經初始化過就什麼都不插 ——
+-- 沒有這個記號的話，使用者把清單刪光、重新進頁面又會被塞回一份，變成刪不掉。
+--
+-- 用 insert … on conflict do nothing 的影響筆數來判斷，不是先 select 再 insert：
+-- 兩台裝置同時打開時，先查後寫會兩邊都查到「沒有」然後各插一份。
+create or replace function public.init_packing(p_trip uuid, p_nodes jsonb)
+returns setof public.packing_nodes language plpgsql set search_path = public as $$
+declare v_fresh int;
+begin
+  insert into public.packing_lists (trip_id, user_id)
+  values (p_trip, auth.uid())
+  on conflict do nothing;
+  get diagnostics v_fresh = row_count;
+
+  if v_fresh > 0 then
+    perform public.insert_packing_nodes(p_trip, p_nodes);
+  end if;
+
+  -- 兩種情況都回傳現況：剛初始化的回新的，已經有的回他自己的，
+  -- 前端不用分兩條路處理。
+  return query
+    select * from public.packing_nodes
+    where trip_id = p_trip and owner_user_id = auth.uid()
+    order by sort_order, created_at;
+end $$;
+
+-- 「從其他旅程複製」與「恢復預設」都走這支：整份取代。
+-- 樹由前端算好（新 uuid、parent 重新對應）整包送來，後端不自己複製樹 ——
+-- 複製樹要遞迴重建 id 對應，在 plpgsql 裡寫是自找麻煩，而前端本來就有整棵樹。
+--
+-- 刪與插在同一個交易裡：中途失敗會整個回滾，不會留下「刪光了但沒插進去」的空清單。
+create or replace function public.replace_packing(p_trip uuid, p_nodes jsonb)
+returns setof public.packing_nodes language plpgsql set search_path = public as $$
+begin
+  -- 只刪最外層，子孫靠 on delete cascade。先刪完再插，因為新舊可能用到同一批 id。
+  delete from public.packing_nodes
+  where trip_id = p_trip and owner_user_id = auth.uid() and parent_id is null;
+  -- 保險：萬一有孤兒（父節點被刪但 cascade 沒涵蓋到的情況）也一起清掉
+  delete from public.packing_nodes
+  where trip_id = p_trip and owner_user_id = auth.uid();
+
+  perform public.insert_packing_nodes(p_trip, p_nodes);
+
+  -- 取代之後也算初始化過，不然下次進頁面又會被塞一份預設
+  insert into public.packing_lists (trip_id, user_id)
+  values (p_trip, auth.uid())
+  on conflict do nothing;
+
+  return query
+    select * from public.packing_nodes
+    where trip_id = p_trip and owner_user_id = auth.uid()
+    order by sort_order, created_at;
 end $$;
 
 -- ---------- 6. Storage ----------

@@ -105,8 +105,10 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 | 個人帳只有本人看得到、改得到 | 同上。讀取刻意不查成員資格，離開專案後仍讀得到自己的舊帳 | 同上 |
 | 分攤的 settled 任何成員都能勾 | `expense_shares_update`，不限當事人（現場誰收到錢誰標） | 同上 |
 | 帳目與分攤必須同生共死 | `save_group_expense()` RPC，security invoker 所以 RLS 照樣生效 | 同上 |
+| **行李清單**：只有本人，同行成員也看不到 | `packing_nodes_all` / `packing_lists_all`，整張表只有本人（不是在共用表裡挑） | 同上 |
+| 行李的父子關係不能跨人、跨旅程、掛在物品下 | `check_packing_parent()` 觸發器，不是 FK —— FK 只保證父節點存在 | 同上 |
 
-共 40 條 policy、5 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite` / `save_group_expense`）、7 個觸發器。
+共 42 條 policy、8 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite` / `save_group_expense` / `init_packing` / `replace_packing` / `insert_packing_nodes`）、9 個觸發器。
 
 行程刻意**沒有** `owner_user_id`，不設個人隔離。PRD §3.2 的理由：行程的價值在於大家看同一份，個人的想法放在自己的清單分頁。
 
@@ -114,7 +116,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 122 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 144 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -146,6 +148,14 @@ grant execute on all functions in schema public to authenticated, service_role; 
 ```
 
 `anon` 不給（全站都要登入，anon 從來不查表）。sequence 也不用管，這個 schema 沒有 `serial` / `identity` 欄位，主鍵全是 uuid —— 哪天真的加了，就還要 `grant usage, select on sequence`。
+
+[`migrate-v2-15.sql`](supabase/migrate-v2-15.sql)（行李清單）是第一支照這個規矩走的，可以直接當範本抄。驗證方式不是看 migration 有沒有報錯 —— 漏 GRANT 不會報錯，要實際換身分試：
+
+```sql
+set role authenticated; select count(*) from public.新表;
+```
+
+漏了就是 `ERROR: permission denied for table 新表`。這條在 rls-test 裡測不到，因為 [`schema.sql`](supabase/schema.sql) 第 7 節的 `on all tables` 會把新表一起涵蓋進去 —— **rls-test 全過不代表那支 migration 的授權是對的**，兩者走的是不同路徑。
 
 [`schema.sql`](supabase/schema.sql) 第 7 節只涵蓋「跑它當下已存在的表」，不會幫之後的 migration 代勞。刻意不用 `alter default privileges` 把自動授權開回來：那等於退回「忘記 revoke 就全部曝光」的姿勢，Supabase 官方也不建議。
 
@@ -326,7 +336,12 @@ supabase/
                         純文字 50 字）。規則同 v2.13.2 的營業時間：行程那一列空的
                         ＝讀 items.station，有值＝自己覆寫，引用列也能填。
                         同一支一起補 detach_itinerary_on_item_delete 的快照。可重複執行
-  rls-test.sql        權限驗證，122 項。跑在用完就丟的本機 Postgres
+  migrate-v2-15.sql   行李清單（v2.15.0）：packing_nodes、packing_lists 兩張新表、
+                        check_packing_parent 觸發器、兩條 policy、init_packing /
+                        replace_packing / insert_packing_nodes 三支函式。
+                        **2026-10-30 之後第一支建新表的 migration，自己附了 GRANT**
+                        （見第 4 節）。整張表只有本人，同行成員也看不到。可重複執行
+  rls-test.sql        權限驗證，144 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

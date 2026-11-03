@@ -734,6 +734,148 @@ do $$ begin
 end $$;
 delete from expenses where id = '77777777-0000-0000-0000-000000000003';
 
+-- ── 行李清單（v2.15.0）：整張表只有本人 ─────────────────────
+-- 目前身分是 Ruby。
+select init_packing(:'trip_id', jsonb_build_array(
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000001', 'parent_id', null,
+                     'kind', 'group', 'title', '托運行李', 'qty', null, 'sort_order', 0),
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000002',
+                     'parent_id', '99999999-0000-0000-0000-000000000001',
+                     'kind', 'item', 'title', '牙刷', 'qty', 2, 'sort_order', 0)
+));
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 2, 'init_packing 放進預設清單');
+  perform ok((select qty from packing_nodes where title = '牙刷') = 2, '物品可以有數量');
+  perform ok((select count(*) from packing_lists) = 1, 'init_packing 留下初始化記號');
+end $$;
+
+-- 第二次呼叫不能再插一份。這同時是「刪光後不會被塞回預設」的保證 ——
+-- 判斷的是記號在不在，不是現在有沒有節點。
+select init_packing(:'trip_id', jsonb_build_array(
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000009', 'parent_id', null,
+                     'kind', 'item', 'title', '不該出現的第二份', 'qty', null, 'sort_order', 0)
+));
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 2, 'init_packing 呼叫兩次只有一份');
+end $$;
+-- 刪光再 init，仍然不會被塞回預設
+delete from packing_nodes where parent_id is null;
+select init_packing(:'trip_id', jsonb_build_array(
+  jsonb_build_object('id', '99999999-0000-0000-0000-00000000000a', 'parent_id', null,
+                     'kind', 'item', 'title', '也不該出現', 'qty', null, 'sort_order', 0)
+));
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 0,
+    '使用者刪光清單後，再進頁面不會被塞回預設');
+end $$;
+
+-- 重新鋪一份來測其餘的規則
+select replace_packing(:'trip_id', jsonb_build_array(
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000001', 'parent_id', null,
+                     'kind', 'group', 'title', '托運行李', 'qty', null, 'sort_order', 0),
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000002',
+                     'parent_id', '99999999-0000-0000-0000-000000000001',
+                     'kind', 'item', 'title', '牙刷', 'qty', 2, 'sort_order', 0)
+));
+update packing_nodes set packed = true where title = '牙刷';
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 2, 'replace_packing 整份換掉');
+  perform ok((select packed from packing_nodes where title = '牙刷'), '可以勾已打包');
+end $$;
+
+-- 刪群組要連子孫一起走
+select replace_packing(:'trip_id', jsonb_build_array(
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000001', 'parent_id', null,
+                     'kind', 'group', 'title', '托運行李', 'qty', null, 'sort_order', 0),
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000002',
+                     'parent_id', '99999999-0000-0000-0000-000000000001',
+                     'kind', 'item', 'title', '牙刷', 'qty', 2, 'sort_order', 0)
+));
+do $$ begin
+  -- 整份取代後打勾要清掉，不然「從其他旅程複製」會把上一趟的打勾帶過來
+  perform ok((select packed from packing_nodes where title = '牙刷') = false,
+    'replace_packing 之後 packed 全部回到 false');
+end $$;
+delete from packing_nodes where id = '99999999-0000-0000-0000-000000000001';
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 0, '刪群組時子孫連帶被刪');
+end $$;
+
+-- 父節點的三個一致性條件
+select replace_packing(:'trip_id', jsonb_build_array(
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000001', 'parent_id', null,
+                     'kind', 'group', 'title', '托運行李', 'qty', null, 'sort_order', 0),
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000002',
+                     'parent_id', '99999999-0000-0000-0000-000000000001',
+                     'kind', 'item', 'title', '牙刷', 'qty', 2, 'sort_order', 0)
+));
+select denied(
+  format('insert into packing_nodes (trip_id, owner_user_id, parent_id, kind, title) values (%L, %L, %L, %L, %L)',
+         :'trip_id', :'ruby', '99999999-0000-0000-0000-000000000002', 'item', '掛在牙刷底下'),
+  '物品底下不能再掛東西');
+select denied(
+  format('insert into packing_nodes (trip_id, owner_user_id, parent_id, kind, title) values (%L, %L, %L, %L, %L)',
+         :'trip_id', :'ruby', '99999999-0000-0000-0000-00000000ffff', 'item', '掛到不存在的父節點'),
+  'parent 指到不存在的節點會被擋');
+-- 群組不准有數量：那個值永遠不顯示，卻會被複製來複製去
+select denied(
+  format('insert into packing_nodes (trip_id, owner_user_id, kind, title, qty) values (%L, %L, %L, %L, %L)',
+         :'trip_id', :'ruby', 'group', '有數量的群組', 3),
+  '群組不能有數量');
+select denied(
+  format('insert into packing_nodes (trip_id, owner_user_id, kind, title) values (%L, %L, %L, %L)',
+         :'trip_id', :'ruby', 'item', '   '),
+  '只有空白的標題會被擋');
+
+-- 別的成員（Jean）完全碰不到 Ruby 的行李
+set app.uid = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 0, '同行成員看不到我的行李清單');
+  perform ok((select count(*) from packing_lists) = 0, '同行成員看不到我的初始化記號');
+end $$;
+select denied(
+  format('update packing_nodes set title = %L where id = %L',
+         '被別人改掉', '99999999-0000-0000-0000-000000000002'),
+  '同行成員改不動我的行李');
+select denied(
+  format('delete from packing_nodes where id = %L', '99999999-0000-0000-0000-000000000002'),
+  '同行成員刪不掉我的行李');
+-- 這條是重點：FK 不看 owner，所以沒有 check_packing_parent 的話，
+-- 知道節點 id 的人可以把自己的節點掛到別人的群組底下 —— 讀不到對方的資料，
+-- 但對方刪群組時 cascade 會連帶刪掉你的東西。
+select denied(
+  format('insert into packing_nodes (trip_id, owner_user_id, parent_id, kind, title) values (%L, %L, %L, %L, %L)',
+         :'trip_id', :'jean', '99999999-0000-0000-0000-000000000001', 'item', '掛到別人的群組'),
+  '不能把自己的節點掛到別人的群組底下');
+-- Jean 自己的行李是另一份，互不干擾
+select init_packing(:'trip_id', jsonb_build_array(
+  jsonb_build_object('id', '99999999-0000-0000-0000-000000000011', 'parent_id', null,
+                     'kind', 'item', 'title', 'Jean 的護照', 'qty', null, 'sort_order', 0)
+));
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 1, '每個人的行李是各自獨立的一份');
+end $$;
+
+-- 非成員完全碰不到
+set app.uid = '33333333-3333-3333-3333-333333333333';
+do $$ begin
+  perform ok((select count(*) from packing_nodes) = 0, '非成員看不到任何行李');
+end $$;
+select denied(
+  format('insert into packing_nodes (trip_id, owner_user_id, kind, title) values (%L, %L, %L, %L)',
+         :'trip_id', :'kai', 'item', '非成員亂塞'),
+  '非成員不能在別人的專案裡建行李');
+select denied(
+  format('select init_packing(%L, %L::jsonb)', :'trip_id', '[]'),
+  '非成員呼叫 init_packing 也沒用');
+
+set app.uid = '11111111-1111-1111-1111-111111111111';
+delete from packing_nodes;
+delete from packing_lists;
+set app.uid = '22222222-2222-2222-2222-222222222222';
+delete from packing_nodes;
+delete from packing_lists;
+
 -- ── 離開與擁有者限制（§3.3）─────────────────────────────────
 update trip_members set status = 'left', left_at = now() where user_id = :'ruby';
 do $$ begin
