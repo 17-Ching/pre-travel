@@ -116,7 +116,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 144 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 151 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -178,7 +178,9 @@ PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_sel
 兩種都是 `item_id` 為 null、`title` 有值，前端分不出來。靠 `detached_at` 區分，由 F-47 的觸發器在斷開時寫入。不要改回用「沒有 itemId 又有 title」判斷，那會把每一筆使用者自己打的項目都標成「原項目已刪除」。
 
 **行程上「空的代表讀清單的」那些欄位，F-47 斷開時要留快照**
-`itinerary_entries` 的 `title`、`hours`、`closed_day`、`station` 都是這個規則：空的就讀 `items` 的值，有值就是這一列自己覆寫。清單項目被刪掉時，空的那些會瞬間失去來源，所以 [`detach_itinerary_on_item_delete`](supabase/schema.sql) 要把被刪項目的值填進去。**再加這類欄位時要一起改這支觸發器**，漏掉的話是標題留著、那一欄默默消失，不報錯。
+`itinerary_entries` 的 `title`、`hours`、`closed_days`、`station` 都是這個規則：空的就讀 `items` 的值，有值就是這一列自己覆寫。清單項目被刪掉時，空的那些會瞬間失去來源，所以 [`detach_itinerary_on_item_delete`](supabase/schema.sql) 要把被刪項目的值填進去。**再加這類欄位時要一起改這支觸發器**，漏掉的話是標題留著、那一欄默默消失，不報錯。
+
+欄位從純量換成陣列時，快照那一行的「空的」判斷也要跟著換（v2.15.1 的 `closed_day` → `closed_days` 是 `coalesce(...)` 換成 `cardinality(...) > 0`）。這裡沿用 `coalesce` 不會報錯但永遠成立，因為 `closed_days` 是 `not null`，等於快照整個失效。
 
 寫斷言時注意**一列只能走到每個欄位的一個分支**（空的→補快照、有值→保留）。rls-test 用兩筆引用同一個項目的行程各走一邊，而且第二筆一定要有自己的 `title` —— 不然斷開後兩列的標題都會變成被刪項目的標題，`where title = ...` 的斷言會一次撈到兩列。
 
@@ -189,6 +191,20 @@ grep -nE "insert into public\.(items|itinerary_entries)|update public\.(items|it
 ```
 
 目前只有兩處：`detach_itinerary_on_item_delete`（要補）與 `sync_visited_on_done`（只碰 `visited`，不受影響）。「複製到我的清單」是前端自己 insert，不走 RPC。
+
+**migration 裡對 `items` / `itinerary_entries` 做 UPDATE，要先關掉 touch 觸發器**
+這兩張表都有 `before update` 的觸發器（`items_touch` / `itinerary_touch`）蓋 `updated_at = now()`、`updated_by = auth.uid()`。在 Supabase SQL Editor 裡 `auth.uid()` 是 **null**，所以 migration 直接跑 UPDATE 會把每一筆被碰到的資料「誰改的」清成 null、「什麼時候改的」全部跳成現在。不報錯，而且沒有備份就回不去。
+
+```sql
+alter table public.items disable trigger items_touch;
+-- ...回填...
+alter table public.items enable trigger items_touch;
+```
+
+關在交易裡面，失敗整筆回捲，不會留下關著的觸發器。v2.15.1 是第一支會做 UPDATE 的 migration（前面幾支都只是 `add column`，碰不到這個坑）。驗證方式是跑完之後數一下 `count(updated_by)`，不是看 migration 有沒有報錯。
+
+**回填的 `where` 要讓重跑是安全的，不是只要不報錯**
+v2.15.1 回填寫的是 `where closed_day is not null and closed_days = '{}'`。少了後半段，重跑這支會把 migration 之後使用者改成多天的值覆蓋回單天。「可重複執行」的標準是重跑完資料跟沒跑一樣，不是 SQL 不噴錯。
 
 **D1 的「影響 0 筆」是預期結果，不是失敗**
 勾完成時只同步自己的地點的 `visited`，引用他人的就是 0 筆。這跟本專案其他地方「0 筆等於被 RLS 拒絕」的判讀相反，不要在那裡加 `must()`。
@@ -341,7 +357,14 @@ supabase/
                         replace_packing / insert_packing_nodes 三支函式。
                         **2026-10-30 之後第一支建新表的 migration，自己附了 GRANT**
                         （見第 4 節）。整張表只有本人，同行成員也看不到。可重複執行
-  rls-test.sql        權限驗證，144 項。跑在用完就丟的本機 Postgres
+  migrate-v2-15-1.sql  公休日從單選改多選（v2.15.1）：items 與 itinerary_entries
+                        加 closed_days text[]，回填舊的 closed_day，兩張表各兩條
+                        約束（值域、「無」互斥），並補 F-47 觸發器的快照。
+                        **第一支會做 UPDATE 的 migration，回填前要關掉 touch
+                        觸發器**，不然 updated_by 會被清光（見第 4 節）。
+                        closed_day 這一版不 drop，留給部署空窗的舊版前端；
+                        下一版 drop 之前要再回填一次。可重複執行
+  rls-test.sql        權限驗證，151 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

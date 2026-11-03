@@ -234,34 +234,52 @@ select denied(
   format('update items set pinned_at = now() where id = %L', :'jean_item'),
   'Ruby 不能置頂 Jean 分頁的項目');
 
--- 營業時間與公休日（v2.13.0）
+-- 營業時間與公休日（v2.13.0；公休日 v2.15.1 從單選改成多選）
 do $$ begin
   perform ok((select hours from items where type = 'reference') = '[]'::jsonb,
     '營業時間預設是空陣列，不是 null');
-  perform ok((select closed_day from items where type = 'reference') is null,
-    '公休日預設是 null（＝沒選，跟選了「無」不一樣）');
+  perform ok((select closed_days from items where type = 'reference') = '{}',
+    '公休日預設是空陣列（＝沒填，跟選了「無」不一樣）');
 end $$;
 -- 午休分兩段，而且第二段跨夜（18:00 開到隔天 02:00）。
 -- close 早於 open 要存得進去 —— 加約束擋掉的話半夜場就填不了。
 update items set hours = '[{"open":"11:00","close":"14:30"},{"open":"18:00","close":"02:00"}]'::jsonb,
-                 closed_day = 'mon'
+                 closed_days = '{mon,thu}'
 where id = :'ruby_ref';
 do $$ begin
   perform ok((select jsonb_array_length(hours) from items where type = 'reference') = 2,
     '營業時間可以存多段（午休）');
   perform ok((select hours -> 1 ->> 'close' from items where type = 'reference') = '02:00',
     '收店時間早於開店時間存得進去（營業到半夜）');
-  perform ok((select closed_day from items where type = 'reference') = 'mon',
-    '可以選公休日');
+  perform ok((select closed_days from items where type = 'reference') = '{mon,thu}',
+    'v2.15.1：一週可以休好幾天');
 end $$;
-update items set closed_day = 'none' where id = :'ruby_ref';
+update items set closed_days = '{none}' where id = :'ruby_ref';
 do $$ begin
-  perform ok((select closed_day from items where type = 'reference') = 'none',
-    '「無」是一個實際的值，不是 null');
+  perform ok((select closed_days from items where type = 'reference') = '{none}',
+    '「無」是一個實際的值，不是空陣列');
 end $$;
 select denied(
-  format('update items set closed_day = %L where id = %L', 'monday', :'ruby_ref'),
+  format('update items set closed_days = %L where id = %L', '{monday}', :'ruby_ref'),
   '不是那八個值的公休日會被擋');
+-- 這一條釘的是一個跟直覺相反的性質：CHECK 判定成 null 是**通過**，所以
+-- 「`<@` 碰到 null 會回 null」的話 '{NULL}' 就會溜進來（cardinality 是 1、
+-- 看起來像有選一天，畫面上卻是空白）。實際上陣列的 <@ 不走三值邏輯，
+-- null 元素對不到任何東西，整條回 false。值域約束因此不需要第二條防線 ——
+-- 但這件事夠反直覺，哪天 <@ 被換成別的寫法會無聲失守，所以留一條斷言。
+select denied(
+  format('update items set closed_days = %L where id = %L', '{NULL}', :'ruby_ref'),
+  '含 null 的公休日會被擋（陣列的 <@ 回 false 不是 null，CHECK 才攔得住）');
+select denied(
+  format('update items set closed_days = %L where id = %L', '{none,mon}', :'ruby_ref'),
+  '「無」不能跟星期幾並存（全年無休又週一公休，讀不出是哪個意思）');
+-- 排序與去重刻意不擋：違反了只是畫面順序怪或重複顯示，擋下來卻是整筆存檔失敗。
+do $$ begin
+  update items set closed_days = '{thu,mon,mon}' where type = 'reference';
+  perform ok((select cardinality(closed_days) from items where type = 'reference') = 3,
+    '沒排序、有重複的公休日存得進去（前端整理，資料庫不擋）');
+end $$;
+update items set closed_days = '{none}' where type = 'reference';
 
 delete from items where type = 'reference';
 
@@ -467,39 +485,52 @@ select denied(
 
 -- v2.13.0 行程營業時間：同圖片與地區，引用清單的那種讀 items 的值，自己這兩欄留空
 update itinerary_entries set hours = '[{"open":"10:00","close":"18:00"}]'::jsonb,
-                             closed_day = 'wed'
+                             closed_days = '{wed}'
 where title = '自己打的夜景點';
 do $$ begin
   perform ok((select jsonb_array_length(hours) from itinerary_entries
               where title = '自己打的夜景點') = 1,
     '自己打的地點可以填營業時間');
-  perform ok((select closed_day from itinerary_entries where title = '自己打的夜景點') = 'wed',
+  perform ok((select closed_days from itinerary_entries where title = '自己打的夜景點') = '{wed}',
     '自己打的地點可以選公休日');
 end $$;
+-- 兩條約束在 itinerary_entries 上也要有。只加在 items 上的話，
+-- 行程這邊照樣存得進矛盾的值，而畫面讀的就是行程這一列（覆寫優先）。
+select denied(
+  format('update itinerary_entries set closed_days = %L where title = %L',
+         '{none,wed}', '自己打的夜景點'),
+  '行程的公休日一樣擋「無」跟星期幾並存');
+select denied(
+  format('update itinerary_entries set closed_days = %L where title = %L',
+         '{NULL}', '自己打的夜景點'),
+  '行程的公休日一樣擋含 null 的陣列');
 -- v2.13.2：引用別人清單的地點，可以自己填營業時間蓋過清單的值。
 -- 別人的清單項目改不動（items_update 限本人），所以覆寫只能存在行程這一列。
 -- 這裡引用的是 Jean 的項目，Ruby 改不了 Jean 的清單。
 -- v2.14.0 的 station 走同一套規則，所以一起驗。
-insert into itinerary_entries (trip_id, date, section, slot, item_id, hours, closed_day, station, created_by)
+insert into itinerary_entries (trip_id, date, section, slot, item_id, hours, closed_days, station, created_by)
 values (:'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
-        '[{"open":"09:00","close":"17:00"}]'::jsonb, 'thu', 'JR 新宿站 東口', :'ruby');
+        '[{"open":"09:00","close":"17:00"}]'::jsonb, '{thu,sun}', 'JR 新宿站 東口', :'ruby');
 do $$ begin
   perform ok((select jsonb_array_length(hours) from itinerary_entries
               where item_id is not null and hours <> '[]'::jsonb) = 1,
     '引用別人清單的行程可以自己填營業時間（v2.13.2 覆寫）');
-  perform ok((select closed_day from itinerary_entries
-              where item_id is not null and closed_day is not null) = 'thu',
-    '引用別人清單的行程可以自己選公休日');
-  perform ok((select station from itinerary_entries where closed_day = 'thu') = 'JR 新宿站 東口',
+  perform ok((select closed_days from itinerary_entries
+              where item_id is not null and closed_days <> '{}') = '{thu,sun}',
+    '引用別人清單的行程可以自己選公休日（而且可以多天）');
+  perform ok((select station from itinerary_entries where closed_days = '{thu,sun}') = 'JR 新宿站 東口',
     '引用別人清單的行程可以自己填最近車站（v2.14.0 覆寫）');
   -- 釘住「覆寫不會回寫到清單」：Ruby 改不動 Jean 的 items，
   -- 所以 Jean 那筆的營業時間與最近車站都必須原封不動
   perform ok((select hours from items where id = (
-               select item_id from itinerary_entries where closed_day = 'thu')) = '[]'::jsonb,
+               select item_id from itinerary_entries where closed_days = '{thu,sun}')) = '[]'::jsonb,
     '覆寫只存在行程那一列，不會回寫到別人的清單');
   perform ok((select station from items where id = (
-               select item_id from itinerary_entries where closed_day = 'thu')) = '',
+               select item_id from itinerary_entries where closed_days = '{thu,sun}')) = '',
     '最近車站的覆寫也不會回寫到別人的清單');
+  perform ok((select closed_days from items where id = (
+               select item_id from itinerary_entries where closed_days = '{thu,sun}')) = '{}',
+    '公休日的覆寫也不會回寫到別人的清單');
 end $$;
 select denied(
   format('update items set station = %L where id = %L', '偷改別人的車站', :'jean_item'),
@@ -510,7 +541,7 @@ select denied(
          :'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item',
          '[{"path":"t/c.jpg"}]', :'ruby'),
   '放行營業時間不等於放行照片，引用的照片仍然跟著清單走');
-delete from itinerary_entries where closed_day = 'thu';
+delete from itinerary_entries where closed_days = '{thu,sun}';
 
 -- v2.9.0：航班與住宿可以附 PDF，其他 kind 不行。
 -- 這段同時驗了「加欄位不需要補 grant」—— 是以 authenticated 的身分寫入新欄位，
@@ -552,13 +583,15 @@ end $$;
 set app.uid = '11111111-1111-1111-1111-111111111111';
 -- v2.13.2：營業時間也要留快照。這一列刻意只覆寫公休日、營業時間留空，
 -- 好讓兩個分支在同一筆資料上都被走到：
---   hours      空的 → 要填入被刪項目的值（不然標題留著、營業時間默默消失）
---   closed_day 有值 → 是這一列自己的覆寫，不能被被刪項目的值蓋掉
--- v2.14.0 的 station 一起驗，它也是「空的＝讀清單的」
-update items set hours = '[{"open":"11:00","close":"23:00"}]'::jsonb, closed_day = 'tue',
+--   hours       空的 → 要填入被刪項目的值（不然標題留著、營業時間默默消失）
+--   closed_days 有值 → 是這一列自己的覆寫，不能被被刪項目的值蓋掉
+-- v2.14.0 的 station 一起驗，它也是「空的＝讀清單的」。
+-- v2.15.1：清單那邊刻意存兩天，好確認快照留下的是整個陣列而不是只有第一天。
+update items set hours = '[{"open":"11:00","close":"23:00"}]'::jsonb,
+                 closed_days = '{tue,fri}',
                  station = '東京 Metro 新宿三丁目站'
 where id = :'jean_item';
-update itinerary_entries set closed_day = 'sat' where id = :'ref_entry';
+update itinerary_entries set closed_days = '{sat}' where id = :'ref_entry';
 -- 一列只能走到每個欄位的一個分支，所以再引用一筆專門走覆寫分支：
 -- ref_entry 的 title 與 station 都是空的（驗快照），這一筆兩個都有值（驗不被蓋掉）。
 -- 這一筆的 title 一定要跟被刪項目的不一樣，不然斷開後兩列的 title 會撞在一起，
@@ -587,8 +620,13 @@ do $$ begin
   perform ok((select hours from itinerary_entries where title = '一蘭 新宿')
              = '[{"open":"11:00","close":"23:00"}]'::jsonb,
     'F-47：沿用清單的營業時間在斷開時有留下快照');
-  perform ok((select closed_day from itinerary_entries where title = '一蘭 新宿') = 'sat',
+  perform ok((select closed_days from itinerary_entries where title = '一蘭 新宿') = '{sat}',
     'F-47：這一列自己覆寫的公休日不會被被刪項目的值蓋掉');
+  -- v2.15.1：另一筆的 closed_days 是空的，走快照分支。整個陣列都要留下 ——
+  -- 只留第一天的話，一週休兩天的店斷開後會變成只休一天，而且不報錯。
+  perform ok((select closed_days from itinerary_entries where title = '一蘭 新宿（早場）')
+             = '{tue,fri}',
+    'F-47：沿用清單的公休日在斷開時整個陣列都有留下快照');
   -- v2.14.0：最近車站兩個分支各驗一筆
   perform ok((select station from itinerary_entries where title = '一蘭 新宿')
              = '東京 Metro 新宿三丁目站',

@@ -121,10 +121,21 @@ create table if not exists public.items (
   -- 產生的，源頭就只會是 HH:MM，在這裡再驗一次只擋得到前端自己的 bug。
   -- 介面只有 type = 'place' 會填，但欄位本身不限 type。
   hours           jsonb not null default '[]'::jsonb,
-  -- 公休日。三種狀態要分得開：null = 沒選（畫面不顯示），'none' = 選了「無」
-  -- （畫面顯示全年無休），其餘 = 那一天公休。用 null 當「沒選」而不是另一個
-  -- 字串，是因為舊資料加欄位後本來就是 null，剛好就是「沒選」。
+  -- 公休日（v2.13.0 的單選版）。v2.15.1 已被 closed_days 取代，前端不再讀寫它。
+  -- 這一版還留著是為了部署空窗：舊版前端還在使用者的分頁裡、還會寫這一欄，
+  -- 當場 drop 會讓那幾分鐘的存檔直接失敗。下一版拿掉（連同下面 F-47 觸發器那一行），
+  -- 拿掉之前要再回填一次 closed_days，見 migrate-v2-15-1.sql 第 2 段。
   closed_day      text check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none')),
+  -- v2.15.1：公休日改多選，有些店一週休兩天。三種狀態要分得開：
+  --   '{}'      沒填（畫面不顯示這一行）
+  --   '{none}'  選了「無」（畫面顯示全年無休）
+  --   其餘      休那幾天
+  -- not null default '{}'：空陣列就能表達「沒填」，不用再讓 null 多一種寫法，
+  -- 否則前端每個讀取點都要同時處理 null 和 '{}'。
+  -- 內容由前端整理好才寫進來（照週一→週日排、去重）。排序與去重不在這裡擋 ——
+  -- 違反了只是畫面順序怪，擋下來卻是整筆存檔失敗。下面兩條約束擋的是會被
+  -- 誤讀成別的意思的值，那是另一回事。
+  closed_days     text[] not null default '{}',
   -- v2.14.0：最近車站，純文字（「JR 新宿站 東口」）。空字串＝沒填。
   -- 不拆成「路線 / 站名 / 出口」三欄：日本有 JR、地鐵、私鐵交錯，韓國又是另一套，
   -- 拆了反而填不進去。使用者抄 Google Maps 上看到的那一行就好。
@@ -132,7 +143,17 @@ create table if not exists public.items (
   created_by      uuid not null references public.profiles on delete cascade,
   updated_by      uuid references public.profiles on delete set null,
   created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now()
+  updated_at      timestamptz not null default now(),
+
+  -- v2.15.1：公休日的值域。'{}' 是任何陣列的子集，所以沒填自然通過。
+  -- 含 null 的陣列（'{NULL}'）也擋得住：陣列的 <@ 不走三值邏輯，null 元素
+  -- 對不到任何東西，整條回 false 而不是 null。有斷言釘住這件事。
+  constraint items_closed_days_check check (
+    closed_days <@ array['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none']::text[]),
+  -- 「無」互斥：'{none,mon}' 是「全年無休，但週一公休」，讀不出使用者的意思。
+  -- 畫面只能二選一，選錯就是告訴使用者那天開門，而店實際上沒開。
+  constraint items_closed_days_none_alone
+    check (not ('none' = any(closed_days)) or cardinality(closed_days) = 1)
 );
 -- 第三種「參考」與第四種「送禮」（v2.6.0）。既有資料庫的 CHECK 要換掉，
 -- 內容跟上面 create table 裡的一致。參考項目沿用既有欄位，沒有新欄位：
@@ -150,6 +171,15 @@ alter table public.items add constraint items_closed_day_check
   check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none'));
 -- v2.14.0：最近車站。
 alter table public.items add column if not exists station text not null default '' check (char_length(station) <= 50);
+-- v2.15.1：公休日改多選。既有資料庫的回填與 touch 觸發器的處理見 migrate-v2-15-1.sql
+-- —— 這裡只重建結構，回填不放在 schema.sql（它是「從零建一份」用的，沒有舊資料）。
+alter table public.items add column if not exists closed_days text[] not null default '{}';
+alter table public.items drop constraint if exists items_closed_days_check;
+alter table public.items add constraint items_closed_days_check check (
+  closed_days <@ array['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none']::text[]);
+alter table public.items drop constraint if exists items_closed_days_none_alone;
+alter table public.items add constraint items_closed_days_none_alone
+  check (not ('none' = any(closed_days)) or cardinality(closed_days) = 1);
 
 create table if not exists public.item_tags (
   item_id uuid not null references public.items on delete cascade,
@@ -200,12 +230,14 @@ create table if not exists public.itinerary_entries (
   files          jsonb not null default '[]'::jsonb,
   -- v2.13.0：營業時間與公休日，格式同 items（見那邊的註解）。
   -- v2.13.2：自己打的地點會填；引用清單的地點想蓋過清單的值時也會填。
-  -- 空的（hours = []、closed_day = null）就讀 items 的值，所以對方改清單這邊會
+  -- 空的（hours = []、closed_days = '{}'）就讀 items 的值，所以對方改清單這邊會
   -- 跟著變；有值就是這一列自己說了算。前端引用自己的清單時是寫回 items、
   -- 這一列留空，只有引用別人的清單才會寫在這裡 —— 但那是前端的選擇，
   -- 資料庫不分這兩種情況。
   hours          jsonb not null default '[]'::jsonb,
+  -- v2.15.1 取代 closed_day，留著的理由見 items.closed_day 那邊的註解
   closed_day     text check (closed_day in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none')),
+  closed_days    text[] not null default '{}',
   -- v2.14.0：最近車站，格式同 items（見那邊的註解）。規則也同 hours：
   -- 空的＝讀 items.station，有值＝這一列自己覆寫。引用列一樣可以填。
   station        text not null default '' check (char_length(station) <= 50),
@@ -246,7 +278,14 @@ create table if not exists public.itinerary_entries (
   constraint quoted_entry_has_no_region check (item_id is null or region_id is null),
   -- v2.9.0：只有航班與住宿會附 PDF。其他 kind 掛檔案沒有地方顯示，
   -- 刪掉的時候也不會有人想到要清，就變成孤兒檔
-  constraint files_only_on_flight_stay check (kind in ('flight', 'stay') or files = '[]'::jsonb)
+  constraint files_only_on_flight_stay check (kind in ('flight', 'stay') or files = '[]'::jsonb),
+  -- v2.15.1：公休日的值域與「無」互斥，兩條都同 items（理由見那邊的註解）。
+  -- 兩條在這張表上也要有：畫面讀的是行程這一列（覆寫優先），只加在 items 上
+  -- 的話矛盾的值照樣進得來。
+  constraint itinerary_entries_closed_days_check check (
+    closed_days <@ array['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none']::text[]),
+  constraint itinerary_entries_closed_days_none_alone
+    check (not ('none' = any(closed_days)) or cardinality(closed_days) = 1)
   -- v2.13.2 拿掉了 quoted_entry_has_no_hours（原本：引用列的 hours 必須是 []、
   -- closed_day 必須是 null）。當時的理由是「兩邊都存會互相矛盾」，而那時候引用列的
   -- 值只可能是清單的副本，所以成立。現在它不是副本而是**覆寫**：別人的清單項目
@@ -321,6 +360,14 @@ alter table public.itinerary_entries add constraint itinerary_entries_closed_day
 alter table public.itinerary_entries drop constraint if exists quoted_entry_has_no_hours;
 -- 行程的最近車站（v2.14.0）。規則同 hours，引用列也能覆寫，所以不加約束
 alter table public.itinerary_entries add column if not exists station text not null default '' check (char_length(station) <= 50);
+-- 公休日改多選（v2.15.1）。回填見 migrate-v2-15-1.sql，這裡只重建結構
+alter table public.itinerary_entries add column if not exists closed_days text[] not null default '{}';
+alter table public.itinerary_entries drop constraint if exists itinerary_entries_closed_days_check;
+alter table public.itinerary_entries add constraint itinerary_entries_closed_days_check check (
+  closed_days <@ array['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'none']::text[]);
+alter table public.itinerary_entries drop constraint if exists itinerary_entries_closed_days_none_alone;
+alter table public.itinerary_entries add constraint itinerary_entries_closed_days_none_alone
+  check (not ('none' = any(closed_days)) or cardinality(closed_days) = 1);
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 
@@ -523,10 +570,15 @@ begin
          -- v2.13.2：營業時間跟 title 同一個道理 —— 空的代表「讀清單的」，
          -- 清單沒了就什麼都不剩，所以斷開時要留下快照。有值的是這一列自己的覆寫，
          -- 不能蓋掉。沒有這兩行的話，標題留著、營業時間卻默默消失。
-         hours      = case when hours <> '[]'::jsonb then hours else old.hours end,
-         closed_day = coalesce(closed_day, old.closed_day),
+         hours       = case when hours <> '[]'::jsonb then hours else old.hours end,
+         -- closed_day 是 v2.13.0 的單選版，v2.15.1 已由 closed_days 取代。
+         -- 這一行先留著，舊版前端在部署空窗那幾分鐘還會讀它。
+         -- 下一版 drop 欄位時連這一行一起拿掉。
+         closed_day  = coalesce(closed_day, old.closed_day),
+         closed_days = case when cardinality(closed_days) > 0
+                            then closed_days else old.closed_days end,
          -- v2.14.0：最近車站同理
-         station    = case when btrim(station) <> '' then station else old.station end,
+         station     = case when btrim(station) <> '' then station else old.station end,
          -- 沒有這個記號的話，「使用者自己打的」和「引用被刪掉的」分不出來，
          -- 每一筆自由輸入的項目都會被誤標成「原項目已刪除」
          detached_at = now(),
