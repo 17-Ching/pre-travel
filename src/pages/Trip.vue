@@ -369,7 +369,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
     </main>
 
     <button v-if="editable && onList" aria-label="新增" @click="add"
-      :class="['fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 flex size-14 items-center justify-center rounded-full bg-accent text-accent-fg shadow-e2 transition duration-150 active:scale-90', store.offline && 'opacity-40']">
+      :class="['fab fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 flex size-14 items-center justify-center rounded-full bg-accent text-accent-fg shadow-e2 transition duration-150 active:scale-90', store.offline && 'opacity-40']">
       <PhPlus :size="26" weight="bold" />
     </button>
 

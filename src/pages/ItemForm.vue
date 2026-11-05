@@ -134,7 +134,7 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
     </div>
   </main>
 
-  <div class="fixed inset-x-0 bottom-0 z-30 mx-auto max-w-[720px] border-t border-line bg-surface px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
+  <div class="bottom-bar fixed inset-x-0 bottom-0 z-30 mx-auto max-w-[720px] border-t border-line bg-surface px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
     <button class="btn-primary h-12 w-full" :disabled="!canSave" @click="save">儲存</button>
   </div>
 </template>

@@ -179,7 +179,7 @@ const counts = (id) => {
   <RouterLink
     v-if="store.ready && !store.loading && !store.loadError"
     to="/trips/new"
-    class="btn-primary fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 h-[52px] rounded-full px-5 shadow-e2"
+    class="fab btn-primary fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 h-[52px] rounded-full px-5 shadow-e2"
   >
     <PhPlus :size="20" weight="bold" />新旅程
   </RouterLink>

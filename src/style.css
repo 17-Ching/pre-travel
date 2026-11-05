@@ -441,3 +441,8 @@ select.input { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://ww
   .avoid-break { break-inside: avoid; }
   main, .print-doc { animation: none !important; }
 }
+
+/* 回到最上面（App.vue）：平常貼近底部，跟新增鈕同高；畫面上有右下角新增鈕（.fab）
+   或底部按鈕列（.bottom-bar）時往上讓開，疊在它們上面。用 :has 看畫面，不用每頁自己報 */
+.to-top { bottom: calc(1.75rem + env(safe-area-inset-bottom)); }
+body:has(.fab, .bottom-bar) .to-top { bottom: calc(6rem + env(safe-area-inset-bottom)); }

@@ -116,7 +116,7 @@ const links = [['members', '成員與邀請'], ['regions', '地區'], ['tags', '
     </template>
   </main>
 
-  <div class="fixed inset-x-0 bottom-0 z-30 mx-auto max-w-[720px] border-t border-line bg-surface px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
+  <div class="bottom-bar fixed inset-x-0 bottom-0 z-30 mx-auto max-w-[720px] border-t border-line bg-surface px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3">
     <button class="btn-primary h-12 w-full" :disabled="!canSave || busy" @click="save">
       {{ busy ? '儲存中…' : editing ? '儲存' : '建立旅程' }}
     </button>

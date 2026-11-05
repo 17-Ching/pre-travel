@@ -243,7 +243,7 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
   </main>
 
   <button aria-label="記一筆" @click="openNew"
-    :class="['fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 flex size-14 items-center justify-center rounded-full bg-accent text-accent-fg shadow-e2 transition duration-150 active:scale-90', store.offline && 'opacity-40']">
+    :class="['fab fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-[max(1.5rem,calc(50vw-360px+1.5rem))] z-30 flex size-14 items-center justify-center rounded-full bg-accent text-accent-fg shadow-e2 transition duration-150 active:scale-90', store.offline && 'opacity-40']">
     <PhPlus :size="26" weight="bold" />
   </button>
 
