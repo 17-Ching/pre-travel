@@ -23,6 +23,7 @@ const toTrip = r => ({
   id: r.id, name: r.name, country: r.country_code, coverPath: r.cover_path, cover: '',
   start: r.start_date, end: r.end_date, ownerId: r.owner_id,
   deletedAt: r.deleted_at, updatedAt: r.updated_at,
+  rates: r.exchange_rates ?? {},   // 匯率（換算台幣參考）{ JPY: { rate, source, at, by } }
 })
 const toMember = r => ({
   tripId: r.trip_id, userId: r.user_id, role: r.role, status: r.status,
@@ -512,4 +513,20 @@ export async function replacePacking(tripId, nodes) {
   const { data, error } = await sb().rpc('replace_packing', { p_trip: tripId, p_nodes: packPayload(nodes) })
   if (error) throw new Error('取代行李清單失敗：' + error.message)
   return data.map(toPack)
+}
+
+// ---- 匯率（v2.17.0）----
+// 旅程共用一份。任何成員都能設（trips 本身只有擁有者能改，所以走 RPC），rate 傳 null＝拿掉
+export async function setExchangeRate(tripId, currency, rate, source) {
+  const { data, error } = await sb().rpc('set_exchange_rate', { p_trip: tripId, p_currency: currency, p_rate: rate, p_source: source })
+  if (error) throw new Error('儲存匯率失敗：' + error.message)
+  return data ?? {}
+}
+// 現在的匯率（1 台幣換多少外幣）：open.er-api.com，免金鑰、有台幣、一天更新一次、允許跨網域，直接從瀏覽器打
+export async function fetchRate(currency) {
+  const res = await fetch('https://open.er-api.com/v6/latest/TWD')
+  const d = res.ok ? await res.json() : null
+  const rate = d?.result === 'success' ? d.rates?.[currency] : null
+  if (!rate) throw new Error('抓不到匯率，請稍後再試或自己填')
+  return { rate, at: new Date(d.time_last_update_unix * 1000).toISOString() }
 }

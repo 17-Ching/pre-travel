@@ -1091,7 +1091,7 @@ export function setDayNote(tripId, date, { note, links, refIds }) {
 // ---- 記帳 ----
 // 共同帳全員可新增修改；個人帳只有自己看得到（RLS 擋，別人的根本不會載進來）。
 // 分攤掛在共同帳底下的 shares，付款人自己那份一律算已付清。
-export { splitEven, debts, totals, fmtMoney, decimalsOf, CATEGORIES, categoryOf, byCategory } from './expense-rules'
+export { splitEven, debts, byPerson, currencyName, toTwd, twdTotal, totals, fmtMoney, decimalsOf, CATEGORIES, categoryOf, byCategory } from './expense-rules'
 export const groupExpenses = tripId => store.expenses
   .filter(e => e.tripId === tripId && e.kind === 'group')
   .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt))
@@ -1237,4 +1237,17 @@ export function deletePack(n) {
   const removed = store.packing.filter(x => ids.has(x.id))
   store.packing = store.packing.filter(x => !ids.has(x.id))
   push(() => api.deletePack(n.id), () => { store.packing = store.packing.concat(removed) })
+}
+
+// ---- 匯率（v2.17.0）：旅程共用，換算台幣只當參考 ----
+export const fetchRate = currency => api.fetchRate(currency)
+export function setTripRate(tripId, currency, rate, source) {
+  const t = trip(tripId)
+  if (!t || store.offline) return toast('需要網路')
+  const before = { ...(t.rates ?? {}) }
+  const next = { ...before }
+  if (rate) next[currency] = { rate, source, at: now(), by: store.me }
+  else delete next[currency]
+  t.rates = next
+  push(async () => { t.rates = await api.setExchangeRate(tripId, currency, rate || null, source) }, () => { t.rates = before })
 }

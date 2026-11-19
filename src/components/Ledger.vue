@@ -1,10 +1,10 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { PhPlus, PhArrowRight, PhCheck, PhPencilSimple, PhTrash, PhArrowBendDownLeft,
+import { PhPlus, PhCheck, PhPencilSimple, PhTrash, PhArrowBendDownLeft, PhCurrencyCircleDollar, PhArrowsClockwise,
   PhForkKnife, PhTrain, PhBed, PhShoppingBag, PhTicket, PhPackage, PhCaretRight } from '@phosphor-icons/vue'
 import { store, prefs, user, me, tripMembers, tripCurrencies, todayISO, toast,
   groupExpenses, myExpenses, addedToMine, saveExpense, deleteExpense, addShareToMine, toggleSettled, settlePair,
-  splitEven, debts, totals, fmtMoney, decimalsOf, CATEGORIES, categoryOf, byCategory } from '../store'
+  splitEven, debts, byPerson, currencyName, toTwd, twdTotal, setTripRate, fetchRate, trip, fmtDate, totals, fmtMoney, decimalsOf, CATEGORIES, categoryOf, byCategory } from '../store'
 import { WEEK, parseDate } from '../date-rules'
 import Avatar from './Avatar.vue'
 import Sheet from './Sheet.vue'
@@ -19,6 +19,43 @@ const list = computed(() => (isGroup.value ? groupExpenses(props.tripId) : myExp
 const sums = computed(() => totals(list.value))
 // 分類統計跟著現在看的那一邊（共同／我的），幣別分開列
 const stats = computed(() => byCategory(list.value))
+// 結算一次看一個幣別（外幣跟台幣混在一起很亂）。只有共同帳記過兩種以上幣別才出現切換；旅程當地的幣別排前面
+const settleCurrencies = computed(() => {
+  const used = new Set(groupExpenses(props.tripId).map(e => e.currency))
+  const order = tripCurrencies(props.tripId)
+  return [...order.filter(c => used.has(c)), ...[...used].filter(c => !order.includes(c))]
+})
+const cur = computed(() => (settleCurrencies.value.includes(p.ledgerCurrency) ? p.ledgerCurrency : settleCurrencies.value[0]))
+
+// ── 匯率：旅程共用一份，外幣換算台幣只當參考（≈ NT$），帳本身和結算都還是原幣別
+const rates = computed(() => trip(props.tripId)?.rates ?? {})
+const twd = (n, c) => toTwd(n, c, rates.value)
+const fmtTwd = (n, c) => (twd(n, c) === null ? '' : `≈ ${fmtMoney(twd(n, c), 'TWD')}`)
+const allTwd = computed(() => (sums.value.length > 1 ? twdTotal(sums.value, rates.value) : null))
+// 要設匯率的外幣：旅程當地的幣別，加上帳裡實際出現過的（不管共同還是我的）
+const foreign = computed(() => [...new Set([...tripCurrencies(props.tripId), ...store.expenses.filter(e => e.tripId === props.tripId).map(e => e.currency)])]
+  .filter(c => c !== 'TWD'))
+const rateFor = ref(null)   // 正在設哪個幣別，null＝抽屜關著
+const rateDraft = ref({ value: '', source: 'manual' })
+const fetching = ref(false)
+function openRate(c) {
+  rateFor.value = c
+  rateDraft.value = { value: rates.value[c]?.rate ? String(rates.value[c].rate) : '', source: rates.value[c]?.source ?? 'manual' }
+}
+async function grabRate() {
+  if (!online()) return
+  fetching.value = true
+  try {
+    const { rate } = await fetchRate(rateFor.value)
+    rateDraft.value = { value: String(+rate.toPrecision(4)), source: 'api' }
+  } catch (err) { toast(err.message) } finally { fetching.value = false }
+}
+const rateOk = computed(() => /^\d+(\.\d{1,6})?$/.test(rateDraft.value.value.trim()) && +rateDraft.value.value > 0 && +rateDraft.value.value < 100000)
+function saveRate(clear) {
+  if (!online()) return
+  setTripRate(props.tripId, rateFor.value, clear ? null : +rateDraft.value.value, rateDraft.value.source)
+  rateFor.value = null
+}
 const statsOpened = ref(0)
 // 類別圖示：跟全 app 同一套線條圖示（Phosphor），不用 emoji —— emoji 每支手機長得不一樣
 const CATEGORY_ICON = { food: PhForkKnife, transport: PhTrain, stay: PhBed, shopping: PhShoppingBag, fun: PhTicket, other: PhPackage }
@@ -26,7 +63,9 @@ const CATEGORY_ICON = { food: PhForkKnife, transport: PhTrain, stay: PhBed, shop
 // 固定對應不用雜湊：類別只有六個，挑彼此差最多的六色，統計圖上相鄰的長條才分得開
 const CATEGORY_HUE = { food: 0, transport: 5, stay: 6, shopping: 7, fun: 1, other: 3 }
 const catColor = k => `tag tag-${CATEGORY_HUE[k] ?? 3}`
-const owed = computed(() => debts(groupExpenses(props.tripId)))
+const owed = computed(() => debts(groupExpenses(props.tripId).filter(e => e.currency === cur.value)))
+// 結算照人看：每個人要付給誰、會收到誰的。同一筆欠款在兩個人底下各出現一次，我排第一個
+const balances = computed(() => byPerson(owed.value, store.me))
 const byDate = computed(() => {
   const m = new Map()
   for (const e of list.value) m.set(e.date, [...(m.get(e.date) ?? []), e])
@@ -161,8 +200,19 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
 
   <main class="gutter pb-32 pt-4">
     <p v-if="sums.length" class="text-[13px] tabular-nums text-muted">
-      {{ isGroup ? '共同花費' : '我花了' }} <span class="font-semibold text-ink">{{ sums.map(([c, n]) => fmtMoney(n, c)).join('・') }}</span>
+      {{ isGroup ? '共同花費' : '我花了' }}
+      <template v-for="([c, n], i) in sums" :key="c"><template v-if="i">・</template><span class="font-semibold text-ink">{{ fmtMoney(n, c) }}</span><template v-if="twd(n, c) !== null">（{{ fmtTwd(n, c) }}）</template></template>
+      <template v-if="allTwd !== null">，合計 ≈ <span class="font-semibold text-ink">{{ fmtMoney(allTwd, 'TWD') }}</span></template>
     </p>
+    <!-- 匯率：一個外幣一行，點了設定。抓的是參考匯率，也可以填自己換匯拿到的 -->
+    <div v-if="foreign.length" class="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+      <button v-for="c in foreign" :key="c" class="flex items-center gap-1 text-[12px] tabular-nums text-muted hover:text-ink" @click="openRate(c)">
+        <PhCurrencyCircleDollar :size="14" class="shrink-0" />
+        <template v-if="rates[c]">1 台幣 ≈ {{ rates[c].rate }} {{ currencyName(c) }}・{{ fmtDate(rates[c].at) }} {{ rates[c].source === 'api' ? '抓的' : '自己填的' }}</template>
+        <span v-else class="text-tint">設定{{ currencyName(c) }}匯率，換算成台幣</span>
+        <PhPencilSimple :size="12" class="shrink-0" />
+      </button>
+    </div>
     <p v-if="!isGroup" class="mt-1 text-[12px] text-muted">只有你自己看得到</p>
 
     <!-- 分類統計：各類別花了多少，長條是佔這個幣別總額的比例。預設收著，不把帳目往下推 -->
@@ -175,7 +225,9 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
            再打開時動畫不會重播。換成新的元素，長條就會重新長一次 -->
       <div :key="statsOpened">
       <div v-for="g in stats" :key="g.currency" class="mt-2.5">
-        <p v-if="stats.length > 1" class="mb-1 text-[12px] font-semibold text-muted">{{ g.currency }}・共 {{ fmtMoney(g.total, g.currency) }}</p>
+        <p v-if="stats.length > 1 || twd(g.total, g.currency) !== null" class="mb-1 text-[12px] font-semibold text-muted">
+          {{ currencyName(g.currency) }}・共 {{ fmtMoney(g.total, g.currency) }}<template v-if="twd(g.total, g.currency) !== null">（{{ fmtTwd(g.total, g.currency) }}）</template>
+        </p>
         <ul class="grid gap-2">
           <li v-for="r in g.rows" :key="r.category">
             <div class="flex items-baseline gap-2 text-[14px]">
@@ -193,19 +245,38 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
       </div>
     </details>
 
-    <!-- 結算：兩兩抵銷後還欠多少。按「結清」把兩人之間的分攤全部勾成已付清 -->
+    <!-- 結算：照實際分帳，同一對人兩兩抵銷。照人分組看：每個人要付給誰、會收到誰的。
+         按「結清」把那兩人之間（這個幣別）的分攤全部勾成已付清，付的人、收的人那邊都能按 -->
     <section v-if="isGroup && list.length" class="card mt-3 p-3">
-      <h3 class="text-[13px] font-semibold tracking-wide text-muted">結算</h3>
+      <div class="flex items-center gap-2">
+        <h3 class="flex-1 text-[13px] font-semibold tracking-wide text-muted">結算</h3>
+        <div v-if="settleCurrencies.length > 1" class="flex gap-1.5" role="group" aria-label="結算幣別">
+          <button v-for="c in settleCurrencies" :key="c" :aria-pressed="c === cur"
+            :class="['chip-state h-7 px-3 text-[13px]', c === cur && 'on']" @click="p.ledgerCurrency = c">{{ currencyName(c) }}</button>
+        </div>
+      </div>
       <p v-if="!owed.length" class="mt-1.5 text-[14px]">大家都結清了 🎉</p>
-      <ul v-else class="mt-1 grid">
-        <li v-for="d in owed" :key="`${d.currency}${d.from}${d.to}`" class="flex items-center gap-2 py-1.5">
-          <Avatar :user="user(d.from)" :size="22" /><span class="min-w-0 truncate text-[14px]">{{ nameOf(d.from) }}</span>
-          <PhArrowRight :size="14" class="shrink-0 text-muted" />
-          <Avatar :user="user(d.to)" :size="22" /><span class="min-w-0 truncate text-[14px]">{{ nameOf(d.to) }}</span>
-          <span class="ml-auto shrink-0 text-[15px] font-semibold tabular-nums">{{ fmtMoney(d.amount, d.currency) }}</span>
-          <button class="chip-state shrink-0" @click="settle(d)">結清</button>
-        </li>
-      </ul>
+      <div v-for="(who, i) in balances" :key="who.id" :class="['py-2.5', i ? 'border-t border-line' : 'pt-1.5']">
+        <div class="flex items-center gap-2">
+          <Avatar :user="user(who.id)" :size="24" />
+          <span class="min-w-0 flex-1 truncate text-[15px] font-semibold">{{ nameOf(who.id) }}</span>
+        </div>
+        <!-- 名字旁邊不放「要付／會收」總數（使用者覺得太雜），只列一筆一筆 -->
+        <ul class="mt-1 grid pl-8">
+          <li v-for="d in who.pay" :key="'p' + d.to" class="flex items-center gap-2 py-1 text-[14px]">
+            <span class="shrink-0 text-muted">付給</span><span class="min-w-0 truncate">{{ nameOf(d.to) }}</span>
+            <span v-if="twd(d.amount, d.currency) !== null" class="ml-auto shrink-0 text-[12px] tabular-nums text-muted">{{ fmtTwd(d.amount, d.currency) }}</span>
+            <span :class="['shrink-0 font-semibold tabular-nums', twd(d.amount, d.currency) === null && 'ml-auto']">{{ fmtMoney(d.amount, d.currency) }}</span>
+            <button class="chip-state h-7 shrink-0 px-2.5 text-[13px]" @click="settle(d)">結清</button>
+          </li>
+          <li v-for="d in who.receive" :key="'r' + d.from" class="flex items-center gap-2 py-1 text-[14px]">
+            <span class="shrink-0 text-muted">向</span><span class="min-w-0 truncate">{{ nameOf(d.from) }}</span><span class="shrink-0 text-muted">收</span>
+            <span v-if="twd(d.amount, d.currency) !== null" class="ml-auto shrink-0 text-[12px] tabular-nums text-muted">{{ fmtTwd(d.amount, d.currency) }}</span>
+            <span :class="['shrink-0 font-semibold tabular-nums text-tint', twd(d.amount, d.currency) === null && 'ml-auto']">{{ fmtMoney(d.amount, d.currency) }}</span>
+            <button class="chip-state h-7 shrink-0 px-2.5 text-[13px]" @click="settle(d)">結清</button>
+          </li>
+        </ul>
+      </div>
     </section>
 
     <div v-if="!list.length" class="mt-14 text-center">
@@ -235,7 +306,10 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
                 <template v-else-if="e.note">{{ e.note }}</template>
               </span>
             </span>
-            <span class="shrink-0 text-[15px] font-semibold tabular-nums">{{ fmtMoney(e.amount, e.currency) }}</span>
+            <span class="shrink-0 text-right">
+              <span class="block text-[15px] font-semibold tabular-nums">{{ fmtMoney(e.amount, e.currency) }}</span>
+              <span v-if="twd(e.amount, e.currency) !== null" class="block text-[11px] tabular-nums text-muted">{{ fmtTwd(e.amount, e.currency) }}</span>
+            </span>
           </button>
         </li>
       </ul>
@@ -251,6 +325,7 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
   <Sheet :open="!!detail" :title="detail?.title" @update:open="v => !v && (detail = null)">
     <div v-if="detail" class="px-3 pb-2">
       <p class="text-[24px] font-semibold tabular-nums">{{ fmtMoney(detail.amount, detail.currency) }}</p>
+      <p v-if="twd(detail.amount, detail.currency) !== null" class="text-[13px] tabular-nums text-muted">{{ fmtTwd(detail.amount, detail.currency) }}</p>
       <p class="mt-0.5 text-[13px] text-muted">{{ dayLabel(detail.date) }}・{{ nameOf(detail.payerId) }} 先付</p>
       <p v-if="detail.note" class="mt-2 whitespace-pre-line text-[14px]">{{ detail.note }}</p>
 
@@ -258,6 +333,7 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
         <li v-for="s in detail.shares" :key="s.userId" class="flex h-12 items-center gap-2.5">
           <Avatar :user="user(s.userId)" :size="26" />
           <span class="min-w-0 flex-1 truncate text-[15px]">{{ nameOf(s.userId) }}</span>
+          <span v-if="twd(s.amount, detail.currency) !== null" class="shrink-0 text-[12px] tabular-nums text-muted">{{ fmtTwd(s.amount, detail.currency) }}</span>
           <span class="shrink-0 text-[15px] tabular-nums">{{ fmtMoney(s.amount, detail.currency) }}</span>
           <span v-if="s.userId === detail.payerId" class="w-[72px] shrink-0 text-center text-[12px] text-muted">付款人</span>
           <button v-else :class="['chip-state w-[72px] shrink-0 justify-center', s.settled && 'on']" :aria-pressed="s.settled" @click="toggle(s.userId)">
@@ -348,6 +424,27 @@ const segCls = on => ['relative z-10 flex h-8 items-center justify-center rounde
         <button v-if="form?.id" class="btn-danger shrink-0" aria-label="刪除" @click="remove"><PhTrash :size="18" /></button>
         <button class="btn-primary flex-1" :disabled="!canSave" @click="save">儲存</button>
       </div>
+    </template>
+  </Sheet>
+  <!-- 設定匯率：抓現在的，或自己填換匯拿到的。全旅程共用，大家看到的台幣換算一樣 -->
+  <Sheet :open="!!rateFor" :title="rateFor ? `${currencyName(rateFor)}匯率` : ''" @update:open="v => !v && (rateFor = null)">
+    <div v-if="rateFor" class="grid gap-3 px-3 pb-2">
+      <label class="label !mb-0" for="rate">1 台幣換多少{{ currencyName(rateFor) }}（{{ rateFor }}）</label>
+      <div class="flex gap-2">
+        <input id="rate" v-model="rateDraft.value" class="input min-w-0 flex-1 tabular-nums" inputmode="decimal" placeholder="例：4.84"
+          @input="rateDraft.source = 'manual'" />
+        <button class="btn-ghost h-11 shrink-0 px-3 text-[14px]" :disabled="fetching" @click="grabRate">
+          <PhArrowsClockwise :size="16" :class="fetching && 'animate-spin'" />抓現在的匯率
+        </button>
+      </div>
+      <p v-if="rateOk" class="text-[13px] tabular-nums text-muted">
+        {{ fmtMoney(1000, 'TWD') }} ≈ {{ fmtMoney(1000 * rateDraft.value, rateFor) }}<template v-if="rateDraft.source === 'api'">・網路上的參考匯率，跟實際換匯會有點差</template>
+      </p>
+      <p class="text-[12px] leading-relaxed text-muted">換算只是參考：帳還是用{{ currencyName(rateFor) }}記、用{{ currencyName(rateFor) }}結算。匯率整趟旅程共用，大家看到的一樣。</p>
+      <button v-if="rates[rateFor]" class="btn-ghost h-10 text-[14px]" @click="saveRate(true)">不要換算（清除匯率）</button>
+    </div>
+    <template #footer>
+      <button class="btn-primary h-12 w-full" :disabled="!rateOk" @click="saveRate(false)">儲存</button>
     </template>
   </Sheet>
 </template>

@@ -45,6 +45,43 @@ export function debts(expenses) {
   return out
 }
 
+// 結算照人看：每個人要付給誰、會收到誰的，各多少。debts() 的每一筆會出現兩次
+// （付的人那邊一次、收的人那邊一次）。
+// 回傳 [{ id, pay: [debt], receive: [debt] }]，me 排第一個，其他照出現順序
+export function byPerson(list, me) {
+  const m = new Map()
+  const of = id => m.get(id) ?? m.set(id, { id, pay: [], receive: [] }).get(id)
+  for (const d of list) {
+    of(d.from).pay.push(d)
+    of(d.to).receive.push(d)
+  }
+  return [...m.values()].sort((x, y) => (y.id === me) - (x.id === me))
+}
+
+// 幣別的中文名，切換列用。沒列到的就顯示代碼
+const CURRENCY_NAME = { TWD: '台幣', JPY: '日幣', KRW: '韓元', THB: '泰銖', VND: '越南盾', SGD: '新幣', HKD: '港幣', MYR: '馬幣',
+  USD: '美金', GBP: '英鎊', EUR: '歐元', AUD: '澳幣', NZD: '紐幣', CAD: '加幣' }
+export const currencyName = c => CURRENCY_NAME[c] ?? c
+
+// 外幣換算台幣，只當參考（≈ NT$）：帳本身、結算都還是原幣別。
+// rates 是旅程共用的那一份 { JPY: { rate, source, at } }，rate＝1 台幣換多少外幣（使用者習慣的講法：
+// 「1 台幣換 4.8 日圓」），存的就是使用者填的那個數，不倒過來存，免得來回換算出現 4.8000001。
+// 台幣本身、還沒設匯率的幣別回 null，畫面就不顯示
+export function toTwd(amount, currency, rates) {
+  const rate = currency === 'TWD' ? null : rates?.[currency]?.rate
+  return rate ? Math.round(amount / rate) : null
+}
+// 好幾個幣別合計成台幣。有任何一個外幣沒設匯率就回 null（算一半的總數會誤導）
+export function twdTotal(sums, rates) {
+  let total = 0
+  for (const [c, n] of sums) {
+    const t = c === 'TWD' ? n : toTwd(n, c, rates)
+    if (t === null) return null
+    total += t
+  }
+  return Math.round(total)
+}
+
 // 各幣別加總，給「共同花了多少」「我花了多少」用。回傳 [[幣別, 金額]]
 export function totals(list) {
   const m = new Map()

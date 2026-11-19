@@ -7,7 +7,7 @@ import { USERNAME_RE, MIN_PASSWORD, normalizeUsername, validateCredentials, vali
 import { addDays, daysBetween, coversDate, stayNights, stayDayLabel, tripPast } from '../src/date-rules.js'
 import { imagePaths, unusedPaths } from '../src/image-rules.js'
 import { cleanHours, cleanClosed, fmtHours } from '../src/hours-rules.js'
-import { splitEven, debts, totals, fmtMoney, byCategory, categoryOf } from '../src/expense-rules.js'
+import { splitEven, debts, byPerson, toTwd, twdTotal, totals, fmtMoney, byCategory, categoryOf } from '../src/expense-rules.js'
 import { fromTemplate, cloneNodes, progress, subtree } from '../src/packing-rules.js'
 import { readFileSync } from 'node:fs'
 import { CHANGELOG } from '../src/changelog.js'
@@ -194,6 +194,27 @@ assert.deepEqual(cat[0].rows.map(r => [r.category, r.amount]), [['transport', 30
 assert.equal(cat[1].rows[0].category, 'other', '沒有類別的舊帳算「其他」')
 assert.equal(categoryOf('不存在')[0], 'other')
 assert.equal(fmtMoney(3200, 'JPY'), '¥3,200')
+
+// ── 結算照人看：每筆欠款在付的人、收的人兩邊各出現一次，我排第一
+{
+  const list = [{ from: 'a', to: 'b', currency: 'USD', amount: 0.1 }, { from: 'me', to: 'b', currency: 'USD', amount: 0.2 }, { from: 'b', to: 'c', currency: 'USD', amount: 5 }]
+  const people = byPerson(list, 'me')
+  assert.deepEqual(people.map(p => p.id), ['me', 'a', 'b', 'c'])
+  const b = people.find(p => p.id === 'b')
+  assert.deepEqual(b.receive.map(d => d.from), ['a', 'me'])
+  assert.deepEqual(b.pay.map(d => d.to), ['c'])
+  assert.equal(people.reduce((s, p) => s + p.pay.length + p.receive.length, 0), list.length * 2)
+}
+
+// ── 匯率換算：只換外幣、沒設匯率就不顯示、合計缺一個匯率就不算
+{
+  const rates = { JPY: { rate: 4.84 } }   // 1 台幣換 4.84 日圓
+  assert.equal(toTwd(15000, 'JPY', rates), 3099)
+  assert.equal(toTwd(1500, 'TWD', rates), null, '台幣本身不用換算')
+  assert.equal(toTwd(1000, 'KRW', rates), null, '還沒設匯率')
+  assert.equal(twdTotal([['TWD', 1500], ['JPY', 15000]], rates), 4599)
+  assert.equal(twdTotal([['TWD', 1500], ['KRW', 10000]], rates), null)
+}
 
 // ── 營業時間：只填一格的不算、照開始時間排、營業到半夜照樣收
 assert.deepEqual(cleanHours([{ open: '17:00', close: '21:00' }, { open: '11:00', close: '14:30' }, { open: '09:00', close: '' }]),
