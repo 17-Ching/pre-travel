@@ -39,10 +39,33 @@ create table if not exists public.trips (
   end_date     date not null,
   constraint trip_dates_ordered check (end_date >= start_date),
   owner_id     uuid not null references public.profiles on delete cascade,
+  -- v2.17.0：一整趟共用一組匯率，全隊看到的台幣換算才會一樣。
+  -- { "JPY": { "rate": 4.84, "source": "api"|"manual", "at": …, "by": <uuid> } }
+  -- rate ＝ **1 台幣換多少單位外幣**（JPY 4.84、KRW 40.4、VND 814）。
+  -- 方向是使用者的講法（「一塊台幣換幾塊日幣」），所以前端換算成台幣是**除的**。
+  -- 反過來寫（1 外幣換多少台幣）資料會長得很像但數字是倒數，存錯方向不會報錯，
+  -- 只會讓畫面上的金額差好幾個數量級，所以這一行是規格不是註解。
+  -- TWD 是基準，不存自己。
+  -- 只當「≈ NT$」參考：帳本身與結算都還是原幣別，不做混幣別結清。
+  --
+  -- 存在 trips 而不是另開一張表：一趟一組、沒有歷史需求，開表要多一條 policy
+  -- 和一次 join。要存歷史（每天的匯率）時再拆，那時 jsonb 也搬得過去。
+  --
+  -- 寫入一律走 set_exchange_rate()：那支會檢查幣別與數值，並自己蓋上 at / by。
+  -- 直接 update 這一欄不會被擋（trips_update 讓擁有者改整列），但沒有人會那樣做，
+  -- 要擋得改成 column-level grant，那會逼著每一欄都明寫授權、新欄位還會漏掉。
+  exchange_rates jsonb not null default '{}'::jsonb
+                 constraint trips_exchange_rates_is_object
+                 check (jsonb_typeof(exchange_rates) = 'object'),
   deleted_at   timestamptz,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+-- 已經建過表的資料庫也要補上（create table if not exists 不會改既有的表）
+alter table public.trips add column if not exists exchange_rates jsonb not null default '{}'::jsonb;
+alter table public.trips drop constraint if exists trips_exchange_rates_is_object;
+alter table public.trips add constraint trips_exchange_rates_is_object
+  check (jsonb_typeof(exchange_rates) = 'object');
 
 create table if not exists public.trip_members (
   trip_id   uuid not null references public.trips on delete cascade,
@@ -923,6 +946,64 @@ begin
     raise exception 'not_owner';
   end if;
   update public.trips set deleted_at = now() where id = p_trip_id and deleted_at is null;
+end $$;
+
+-- v2.17.0：設定旅程的共用匯率。
+--
+-- 為什麼要 RPC：記帳是全員的事，誰都可能去換匯、誰都該能更新匯率，但
+-- trips_update 只讓擁有者改 trips。security definer 繞過 RLS，成員資格改在
+-- 函式裡自己檢查 —— 跟 delete_trip 同一個手法，只是方向相反（那支是收緊、
+-- 這支是放寬）。
+--
+-- at / by 由這裡蓋，不收前端傳進來的值。前端可以謊報「是誰、什麼時候設的」
+-- 的話，畫面上那行「Ruby 於 11/19 設定」就沒有意義。
+create or replace function public.set_exchange_rate(
+  p_trip uuid, p_currency text, p_rate numeric, p_source text
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_rates jsonb;
+begin
+  if not public.is_trip_member(p_trip) then raise exception 'not_member'; end if;
+
+  -- 幣別與來源不管是設定還是清除都要驗。清除時 p_rate 是 null，但四個參數
+  -- 一律要給 —— PostgREST 是照參數名找函式的，少給一個會變成「找不到函式」，
+  -- 那個錯訊比 bad_source 難查得多。
+  if p_currency is null or p_currency !~ '^[A-Z]{3}$' then
+    raise exception 'bad_currency';
+  end if;
+  -- TWD 是基準，存 TWD→TWD 的匯率只會讓前端多一個要處理的特例
+  if p_currency = 'TWD' then raise exception 'twd_is_base'; end if;
+  if p_source is null or p_source not in ('api', 'manual') then
+    raise exception 'bad_source';
+  end if;
+
+  -- 關鍵：一定要在**同一句 UPDATE** 裡讀 exchange_rates 再合併。
+  -- 先 select 出來、再 update 寫回去的話，兩個人同時設不同幣別會互相蓋掉
+  -- （典型的 lost update）。寫成一句的話 READ COMMITTED 會讓後到的那句等前一句
+  -- 提交、然後**用更新後的列重算**，所以 JPY 與 KRW 兩邊都留得住。有斷言守著。
+  if p_rate is null then
+    -- 清除這個幣別。`-` 對不存在的 key 是沒事的，所以重複清除不會出錯。
+    update public.trips
+       set exchange_rates = exchange_rates - p_currency
+     where id = p_trip and deleted_at is null
+    returning exchange_rates into v_rates;
+  else
+    -- rate ＝ 1 台幣換多少外幣，所以越南盾約 814、韓元約 40、日幣約 4.8，
+    -- 而歐元、英鎊那種比台幣大的幣別會落在 0.03 上下。上下限都要留得很寬。
+    -- 100000 不是精算過的上界，要擋的是 0、負數與明顯打錯的數量級。
+    if p_rate <= 0 or p_rate >= 100000 then raise exception 'rate_out_of_range'; end if;
+    update public.trips
+       set exchange_rates = exchange_rates || jsonb_build_object(
+             p_currency,
+             jsonb_build_object('rate', p_rate, 'source', p_source,
+                                'at', now(), 'by', auth.uid()))
+     where id = p_trip and deleted_at is null
+    returning exchange_rates into v_rates;
+  end if;
+
+  -- is_trip_member 不看 deleted_at，所以已經軟刪除的專案會走到這裡才被擋下來。
+  -- 讀都讀不到的專案不該還能寫進東西。
+  if not found then raise exception 'trip_not_found'; end if;
+  return v_rates;
 end $$;
 
 -- F-06：邀請頁在加入之前還不是成員，讀不到 trips / profiles，所以用 RPC 回傳需要顯示的部分

@@ -99,6 +99,23 @@ exception
     raise notice '  PASS  %（%）', label, sqlerrm;
 end $$;
 
+-- 預期被某一句 raise exception 擋下來的呼叫。跟 denied() 的差別是它**比對錯誤訊息**：
+-- denied() 的 `when others` 會把任何錯誤都當成通過，連「函式名稱打錯」「參數少給一個」
+-- 都會印 PASS。驗 RPC 的輸入檢查時那等於沒驗，所以這裡要指定預期的訊息。
+create or replace function rejects(stmt text, want text, label text) returns void language plpgsql as $$
+begin
+  execute stmt;
+  raise exception 'FAIL  %（應該被擋，卻成功了）', label;
+exception
+  when others then
+    if sqlerrm like 'FAIL%' then raise; end if;
+    if sqlerrm = want then
+      raise notice '  PASS  %（%）', label, want;
+    else
+      raise exception 'FAIL  %（預期 %，實際 %）', label, want, sqlerrm;
+    end if;
+end $$;
+
 \set jean '11111111-1111-1111-1111-111111111111'
 \set ruby '22222222-2222-2222-2222-222222222222'
 \set kai  '33333333-3333-3333-3333-333333333333'
@@ -914,8 +931,130 @@ set app.uid = '22222222-2222-2222-2222-222222222222';
 delete from packing_nodes;
 delete from packing_lists;
 
+-- ── 共用匯率（v2.17.0）──────────────────────────────────────
+-- 現在身分是 Ruby：這個專案的成員，但**不是**擁有者。
+-- 這段的前提就是這件事 —— 記帳是全員的事，誰都可能去換匯，所以誰都該能設匯率，
+-- 但 trips_update 只讓擁有者改 trips。沒有這支 RPC 的話 Ruby 設不了。
+do $$ begin
+  perform ok((select exchange_rates from trips where id = (select id from trips)) = '{}'::jsonb,
+    '新專案的匯率是空物件，不是 null');
+end $$;
+-- 先釘住「為什麼需要 RPC」：Ruby 直接改 trips 會被擋
+select denied(
+  format('update trips set exchange_rates = %L::jsonb where id = %L',
+         '{"JPY":{"rate":9.99}}', :'trip_id'),
+  '非擁有者不能直接改 trips 的匯率（所以要走 set_exchange_rate）');
+
+select set_exchange_rate(:'trip_id', 'JPY', 4.84, 'api');
+do $$
+declare r jsonb;
+begin
+  select exchange_rates into r from trips where id = (select id from trips);
+  perform ok(r -> 'JPY' ->> 'rate' = '4.84',
+    '成員（非擁有者）可以設匯率');
+  -- 小數一定要原樣留著。rate ＝ 1 台幣換多少外幣，前端換算是用除的，
+  -- 被截成整數的話日幣 4.84 變 4，每一筆日幣的台幣金額都會多兩成，而且不報錯。
+  -- 歐元那種 0.03 上下的幣別更慘，截完是 0 —— 除以 0。
+  perform ok((r -> 'JPY' ->> 'rate')::numeric = 4.84::numeric,
+    '匯率的小數沒有被截成整數');
+  -- at / by 由函式蓋，不收前端傳進來的值
+  perform ok(r -> 'JPY' ->> 'by' = '22222222-2222-2222-2222-222222222222',
+    'by 是函式用 auth.uid() 填的，不是前端說了算');
+  perform ok((r -> 'JPY' ->> 'at')::timestamptz > now() - interval '1 minute',
+    'at 是函式用 now() 填的');
+  perform ok(r -> 'JPY' ->> 'source' = 'api', 'source 有存下來');
+end $$;
+
+-- 重點：設第二個幣別不能把第一個蓋掉。整包覆蓋的寫法在這裡會現形 ——
+-- 兩個人各自設自己換的幣別是很正常的事。
+select set_exchange_rate(:'trip_id', 'KRW', 40.4, 'manual');
+do $$
+declare r jsonb;
+begin
+  select exchange_rates into r from trips where id = (select id from trips);
+  perform ok(r -> 'JPY' ->> 'rate' = '4.84', '設 KRW 不會蓋掉 JPY');
+  perform ok(r -> 'KRW' ->> 'rate' = '40.4', 'KRW 也存進去了');
+  perform ok((select count(*) from jsonb_object_keys(r)) = 2, '兩個幣別並存');
+end $$;
+
+-- 比台幣「大」的幣別：1 台幣只換得到 0.0285 歐元。方向改成「1 台幣換多少外幣」
+-- 之後，主要貨幣全部落在 1 以下，所以小數在這裡比日幣那筆更要命 ——
+-- 截成整數就是 0，前端拿它當除數。
+select set_exchange_rate(:'trip_id', 'EUR', 0.0285, 'api');
+do $$
+declare r jsonb;
+begin
+  select exchange_rates into r from trips where id = (select id from trips);
+  perform ok(r -> 'EUR' ->> 'rate' = '0.0285',
+    '小於 1 的匯率存得進去（歐元那種比台幣大的幣別）');
+  perform ok((r -> 'EUR' ->> 'rate')::numeric > 0,
+    '小於 1 的匯率沒有被截成 0（截成 0 前端會除以零）');
+end $$;
+select set_exchange_rate(:'trip_id', 'EUR', null, 'api');
+
+-- 同一個幣別再設一次是覆寫，rate 與 source 都要換掉
+select set_exchange_rate(:'trip_id', 'JPY', 4.9, 'manual');
+do $$
+declare r jsonb;
+begin
+  select exchange_rates into r from trips where id = (select id from trips);
+  perform ok(r -> 'JPY' ->> 'rate' = '4.9' and r -> 'JPY' ->> 'source' = 'manual',
+    '同一個幣別再設一次是覆寫（自己換匯拿到的匯率蓋掉 API 抓的）');
+  perform ok((select count(*) from jsonb_object_keys(r)) = 2, '覆寫不會多出一個 key');
+end $$;
+
+-- p_rate 給 null ＝ 清掉那個幣別，回到「沒設匯率」
+select set_exchange_rate(:'trip_id', 'JPY', null, 'manual');
+do $$
+declare r jsonb;
+begin
+  select exchange_rates into r from trips where id = (select id from trips);
+  perform ok(not (r ? 'JPY'), 'p_rate 給 null 會刪掉那個幣別');
+  perform ok(r ? 'KRW', '刪 JPY 不會順便刪掉 KRW');
+end $$;
+-- 再清一次不該出錯：jsonb 的 `-` 對不存在的 key 本來就沒事，
+-- 前端重送或兩個人同時清不會變成一個錯誤畫面
+select set_exchange_rate(:'trip_id', 'JPY', null, 'manual');
+do $$ begin
+  perform ok(not ((select exchange_rates from trips where id = (select id from trips)) ? 'JPY'),
+    '重複清除同一個幣別不會出錯');
+end $$;
+
+-- 輸入檢查。這裡全部用 rejects() 比對確切的錯誤訊息 —— 用 denied() 的話
+-- 連「函式打錯字」都會印 PASS。
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'TWD', 1, 'manual'),
+  'twd_is_base', 'TWD 是基準，不能設自己對自己的匯率');
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'jpy', 4.84, 'manual'),
+  'bad_currency', '小寫幣別被擋（避免 JPY 與 jpy 變成兩個 key）');
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'JP', 4.84, 'manual'),
+  'bad_currency', '不是三碼的幣別被擋');
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'JPYY', 4.84, 'manual'),
+  'bad_currency', '四碼的幣別被擋');
+select rejects(format('select set_exchange_rate(%L, %L, %L::numeric, %L)', :'trip_id', 'JPY', -1, 'manual'),
+  'rate_out_of_range', '負數匯率被擋');
+select rejects(format('select set_exchange_rate(%L, %L, %L::numeric, %L)', :'trip_id', 'JPY', 0, 'manual'),
+  'rate_out_of_range', '0 被擋（換算會全部變成 NT$0）');
+select rejects(format('select set_exchange_rate(%L, %L, %L::numeric, %L)', :'trip_id', 'JPY', 100000, 'manual'),
+  'rate_out_of_range', '明顯打錯數量級的匯率被擋');
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'JPY', 4.84, 'guess'),
+  'bad_source', 'source 只收 api 與 manual');
+-- 清除那條路也要驗幣別與 source，不然「清掉 twd」之類的呼叫會靜悄悄地成功
+select rejects(format('select set_exchange_rate(%L, %L, NULL, %L)', :'trip_id', 'jpy', 'manual'),
+  'bad_currency', '清除時的幣別一樣要驗');
+
+-- 非成員
+set app.uid = '33333333-3333-3333-3333-333333333333';
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'JPY', 4.84, 'manual'),
+  'not_member', '非成員不能設別人專案的匯率');
+
+set app.uid = '22222222-2222-2222-2222-222222222222';
+
 -- ── 離開與擁有者限制（§3.3）─────────────────────────────────
 update trip_members set status = 'left', left_at = now() where user_id = :'ruby';
+-- 離開之後連自己設過的匯率都不能再改。is_trip_member 要求 status = 'active'，
+-- 這條就是在守那個 active。
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'KRW', 40.4, 'manual'),
+  'not_member', '已經離開的成員不能再改匯率');
 do $$ begin
   perform ok((select count(*) from trips) = 0, '離開後就看不到這個專案了');
 end $$;
@@ -953,6 +1092,15 @@ select delete_trip(:'trip_id');
 do $$ begin
   perform ok((select count(*) from trips) = 0, '擁有者用 delete_trip 軟刪除成功');
 end $$;
+-- is_trip_member 不看 deleted_at，所以成員資格還在、第一道檢查過得去。
+-- 擋下來的是 RPC 裡 UPDATE 的 `deleted_at is null` ——「讀都讀不到的專案
+-- 不該還能寫進東西」。沒有那一條的話這裡會靜悄悄地成功。
+select rejects(format('select set_exchange_rate(%L, %L, %L, %L)', :'trip_id', 'JPY', 4.84, 'manual'),
+  'trip_not_found', '軟刪除的專案不能再設匯率');
+-- 清除是另一條分支，有自己的 UPDATE，所以 deleted_at is null 要分開驗。
+-- 只驗設定那條的話，清除那條少了守衛也看不出來。
+select rejects(format('select set_exchange_rate(%L, %L, NULL, %L)', :'trip_id', 'KRW', 'manual'),
+  'trip_not_found', '軟刪除的專案也不能清除匯率（清除是另一條分支）');
 
 reset role;
 \echo ''

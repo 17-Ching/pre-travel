@@ -108,7 +108,9 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 | **行李清單**：只有本人，同行成員也看不到 | `packing_nodes_all` / `packing_lists_all`，整張表只有本人（不是在共用表裡挑） | 同上 |
 | 行李的父子關係不能跨人、跨旅程、掛在物品下 | `check_packing_parent()` 觸發器，不是 FK —— FK 只保證父節點存在 | 同上 |
 
-共 42 條 policy、8 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite` / `save_group_expense` / `init_packing` / `replace_packing` / `insert_packing_nodes`）、9 個觸發器。
+| **共用匯率**：任何 active 成員都能設，不限擁有者 | `set_exchange_rate()` RPC，security definer 繞過只讓擁有者改的 `trips_update` | 同上 |
+
+共 42 條 policy、9 支 RPC（`create_trip` / `delete_trip` / `invite_preview` / `accept_invite` / `save_group_expense` / `init_packing` / `replace_packing` / `insert_packing_nodes` / `set_exchange_rate`）、9 個觸發器。
 
 行程刻意**沒有** `owner_user_id`，不設個人隔離。PRD §3.2 的理由：行程的價值在於大家看同一份，個人的想法放在自己的清單分頁。
 
@@ -116,7 +118,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 151 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 181 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -191,6 +193,28 @@ grep -nE "insert into public\.(items|itinerary_entries)|update public\.(items|it
 ```
 
 目前只有兩處：`detach_itinerary_on_item_delete`（要補）與 `sync_visited_on_done`（只碰 `visited`，不受影響）。「複製到我的清單」是前端自己 insert，不走 RPC。
+
+**匯率的方向是「1 台幣換多少外幣」，存反了不會報錯**
+`exchange_rates` 的 `rate` 是 **1 TWD 換得到幾單位外幣**（JPY 4.84、KRW 40.4、VND 814、EUR 0.0285），所以換算回台幣是**除的**。反過來存（1 外幣換多少台幣）數字剛好是倒數，型別一樣、約束一樣、什麼錯都不會噴，只有畫面上的金額差好幾個數量級。主要貨幣在這個方向下多半小於 1，所以任何把 `rate` 當整數處理的地方都會變成 0，然後除以零。
+
+**改 jsonb 裡一個 key 的 RPC，一定要寫成單句 UPDATE**
+`set_exchange_rate` 這種「讀出整包、改一個 key、寫回去」的函式，如果寫成
+
+```sql
+select exchange_rates into v from trips where id = p_trip;   -- 先讀
+update trips set exchange_rates = v || ... where id = p_trip; -- 再寫
+```
+
+兩個人同時設不同幣別會互相蓋掉（典型的 lost update），而且**兩邊都回傳成功**。正確寫法是在同一句 UPDATE 裡引用那一欄：
+
+```sql
+update trips set exchange_rates = exchange_rates || jsonb_build_object(...) where id = p_trip;
+```
+
+READ COMMITTED 會讓後到的那句等前一句提交、然後用更新後的列重算，所以兩個 key 都留得住。實測過：壞寫法會讓先寫的那個幣別整個消失。rls-test 用循序的兩次呼叫守住合併語意（單一連線測不了真正的競爭，真正的競爭是用兩條連線另外驗的）。
+
+**`denied()` 不能拿來驗 RPC 的輸入檢查，要用 `rejects()`**
+`denied()` 的 `when others` 把**任何**錯誤都當成通過 —— 函式名稱打錯、參數少給一個、型別轉換失敗，全都會印 PASS。驗 RLS 擋不擋得住時這樣沒問題（重點是「有沒有被擋」），但驗 `raise exception 'bad_currency'` 這種輸入檢查時等於沒驗。`rejects(stmt, 預期訊息, label)` 會比對確切的錯誤訊息，訊息對不上就 FAIL。
 
 **migration 裡對 `items` / `itinerary_entries` 做 UPDATE，要先關掉 touch 觸發器**
 這兩張表都有 `before update` 的觸發器（`items_touch` / `itinerary_touch`）蓋 `updated_at = now()`、`updated_by = auth.uid()`。在 Supabase SQL Editor 裡 `auth.uid()` 是 **null**，所以 migration 直接跑 UPDATE 會把每一筆被碰到的資料「誰改的」清成 null、「什麼時候改的」全部跳成現在。不報錯，而且沒有備份就回不去。
@@ -364,7 +388,13 @@ supabase/
                         觸發器**，不然 updated_by 會被清光（見第 4 節）。
                         closed_day 這一版不 drop，留給部署空窗的舊版前端；
                         下一版 drop 之前要再回填一次。可重複執行
-  rls-test.sql        權限驗證，151 項。跑在用完就丟的本機 Postgres
+  migrate-v2-17.sql   旅程的共用匯率（v2.17.0）：trips 加 exchange_rates jsonb
+                        ＋ set_exchange_rate RPC。RPC 是 security definer，因為
+                        trips_update 只讓擁有者改，而記帳是全員的事。
+                        只加欄位不用補表的 GRANT；新函式吃得到 PUBLIC 的預設
+                        EXECUTE，還是明寫一份（見第 4 節的理由）。
+                        不做回填，所以不碰 touch 觸發器那個坑。可重複執行
+  rls-test.sql        權限驗證，181 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址
