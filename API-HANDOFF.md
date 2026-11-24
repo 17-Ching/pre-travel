@@ -118,7 +118,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 190 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 196 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -184,7 +184,7 @@ PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_sel
 
 欄位從純量換成陣列時，快照那一行的「空的」判斷也要跟著換（v2.15.1 的 `closed_day` → `closed_days` 是 `coalesce(...)` 換成 `cardinality(...) > 0`）。這裡沿用 `coalesce` 不會報錯但永遠成立，因為 `closed_days` 是 `not null`，等於快照整個失效。
 
-**反過來說，不是每個新欄位都該加進那支觸發器。** 判準是「這一欄空的時候，值是不是來自 `items`」。`important`（v2.18.0）從頭到尾只存在行程這一列，沒有第二個來源，所以斷開時要**原地不動** —— 那支觸發器是逐欄列舉的 UPDATE，沒列到就自然不動，什麼都不用做。好心把它加進 set 清單反而會把使用者標的必去清掉。rls-test 兩個方向都有斷言。
+**反過來說，不是每個新欄位都該加進那支觸發器。** 判準是「這一欄空的時候，值是不是來自 `items`」。`important`（v2.18.0）與 `duration`（v2.19.0）從頭到尾只存在行程這一列，沒有第二個來源（`items` 連這些欄位都沒有），所以斷開時要**原地不動** —— 那支觸發器是逐欄列舉的 UPDATE，沒列到就自然不動，什麼都不用做。好心把它加進 set 清單反而會把使用者填的值清掉。rls-test 兩個方向都有斷言。
 
 寫斷言時注意**一列只能走到每個欄位的一個分支**（空的→補快照、有值→保留）。rls-test 用兩筆引用同一個項目的行程各走一邊，而且第二筆一定要有自己的 `title` —— 不然斷開後兩列的標題都會變成被刪項目的標題，`where title = ...` 的斷言會一次撈到兩列。
 
@@ -195,6 +195,11 @@ grep -nE "insert into public\.(items|itinerary_entries)|update public\.(items|it
 ```
 
 目前只有兩處：`detach_itinerary_on_item_delete`（要補）與 `sync_visited_on_done`（只碰 `visited`，不受影響）。「複製到我的清單」是前端自己 insert，不走 RPC。
+
+**文字欄位的長度上限要跟前端的截斷「同一個數字、而且含等於」**
+前端截到 20 字、資料庫寫 `< 20`，使用者打滿的那一筆就會**整列存檔失敗**（CHECK 擋的是整個 row，不是只有那一欄）。上限一律寫 `<= N`，N 跟前端的 `slice(0, N)` 同一個數字。
+
+兩邊數的單位其實不一樣：JS 的 `slice` 數 UTF-16 單位，`char_length` 數字元。中日文兩者相同，emoji 是 JS 那邊砍得更兇（一個 emoji 占 2 個 UTF-16 單位），所以前端截過的字串**不可能**超過資料庫的上限。方向是安全的，但這只在「同一個數字」時成立 —— 把資料庫調得比前端小就破功。rls-test 對 `duration` 剛好 20 字與 21 字各有一條斷言釘住這個邊界。
 
 **匯率的方向是「1 台幣換多少外幣」，存反了不會報錯**
 `exchange_rates` 的 `rate` 是 **1 TWD 換得到幾單位外幣**（JPY 4.84、KRW 40.4、VND 814、EUR 0.0285），所以換算回台幣是**除的**。反過來存（1 外幣換多少台幣）數字剛好是倒數，型別一樣、約束一樣、什麼錯都不會噴，只有畫面上的金額差好幾個數量級。主要貨幣在這個方向下多半小於 1，所以任何把 `rate` 當整數處理的地方都會變成 0，然後除以零。
@@ -401,7 +406,12 @@ supabase/
                         不用回填、不碰 touch 觸發器。不限 kind 也不加
                         quoted_entry 類約束，理由見 schema.sql 建表那段。
                         F-47 斷開時原地保留，觸發器不用改。可重複執行
-  rls-test.sql        權限驗證，190 項。跑在用完就丟的本機 Postgres
+  migrate-v2-19.sql   itinerary_entries 加 duration（v2.19.0，交通的預估時程）。
+                        **自由文字**（「約 25 分」「1 小時半」），不是分鐘數。
+                        同 v2.18.0：RLS 不動、GRANT 不用補、不用回填、
+                        不碰 touch 觸發器、不限 kind、F-47 原地保留。
+                        上限 20 字，跟前端的截斷一致。可重複執行
+  rls-test.sql        權限驗證，196 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

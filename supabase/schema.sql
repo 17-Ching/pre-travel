@@ -241,6 +241,16 @@ create table if not exists public.itinerary_entries (
   -- 當天要改成「今天只買這個」不該回頭改到清單本身（標題與照片仍跟著原項目走）
   links          jsonb not null default '[]'::jsonb,
   transport_mode text not null default '' check (char_length(transport_mode) <= 30),
+  -- v2.19.0：預估時程。**自由文字**（「約 25 分」「1 小時半」「看路況，抓一小時」），
+  -- 不是分鐘數 —— 存成 int 的話「1 小時半」要先被前端拆成 90，而使用者真正想寫的
+  -- 常常是「大概」「看路況」這種拆不出數字的話，拆不出來就只能丟掉。
+  -- 這欄只存在行程這一列（不從 items 來），所以 F-47 斷開時原地不動，理由同 important。
+  -- 不限 kind：畫面目前只有 transport 會填，但限制 kind 的代價是整筆存檔失敗，
+  -- 理由同 important 與 items.pinned_at。
+  -- 20 字跟前端的截斷一致。JS 的 slice(0, 20) 數的是 UTF-16 單位、char_length 數的是
+  -- 字元，兩者對中日文一樣，對 emoji 是 JS 那邊先砍得更兇 —— 所以前端截過的字串
+  -- 不可能超過這裡的上限，不會有「前端以為存得進去、資料庫擋下來」的落差。
+  duration       text not null default '' check (char_length(duration) <= 20),
   -- D8：純 TIME 不做時區換算。在台灣排、在日本看，用 timestamp 會整份差幾小時。
   start_time     time,
   end_time       time,
@@ -402,6 +412,13 @@ alter table public.itinerary_entries add constraint itinerary_entries_closed_day
   check (not ('none' = any(closed_days)) or cardinality(closed_days) = 1);
 -- 必去（v2.18.0）。舊資料吃預設值 false，不用回填。不限 kind，理由見建表那段。
 alter table public.itinerary_entries add column if not exists important boolean not null default false;
+-- 預估時程（v2.19.0）。自由文字，舊資料吃預設值 ''，不用回填。不限 kind，理由見建表那段。
+-- 約束分開寫：add column if not exists 在欄位已存在時會連 inline check 一起跳過，
+-- 分開 drop / add 才保證跑完一定有這條（重跑也安全）。
+alter table public.itinerary_entries add column if not exists duration text not null default '';
+alter table public.itinerary_entries drop constraint if exists itinerary_entries_duration_check;
+alter table public.itinerary_entries add constraint itinerary_entries_duration_check
+  check (char_length(duration) <= 20);
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 

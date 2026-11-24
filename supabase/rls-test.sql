@@ -615,6 +615,37 @@ do $$ begin
 end $$;
 delete from itinerary_entries where item_id is not null and important;
 
+-- v2.19.0 預估時程：自由文字，成員填得起來
+do $$ begin
+  perform ok((select duration from itinerary_entries where title = '新宿 → 鎌倉') = '',
+    '預估時程預設是空字串，不是 null');
+end $$;
+update itinerary_entries set duration = '約 1 小時半' where title = '新宿 → 鎌倉';
+do $$ begin
+  perform ok((select duration from itinerary_entries where title = '新宿 → 鎌倉') = '約 1 小時半',
+    '成員可以填交通的預估時程（存文字，不是分鐘數）');
+end $$;
+-- 邊界：前端截到 20 字，所以剛好 20 字一定要存得進去。
+-- 寫成 <= 19 或 < 20 的話，使用者打滿的那一筆會整列存檔失敗。
+update itinerary_entries set duration = repeat('分', 20) where title = '新宿 → 鎌倉';
+do $$ begin
+  perform ok((select char_length(duration) from itinerary_entries where title = '新宿 → 鎌倉') = 20,
+    '剛好 20 字的預估時程存得進去（上限是 <= 20，不是 < 20）');
+end $$;
+select denied(
+  format('update itinerary_entries set duration = %L where title = %L', repeat('分', 21), '新宿 → 鎌倉'),
+  '超過 20 字的預估時程被擋下來');
+-- 不限 kind（理由見 schema.sql 建表那段）：畫面只給交通輸入，但資料層不擋
+insert into itinerary_entries (trip_id, date, section, slot, kind, title, end_date, duration, created_by)
+values (:'trip_id', '2026-11-13', 'schedule', 'morning', 'stay', '新宿的飯店',
+        '2026-11-14', '到機場抓一小時', :'ruby');
+do $$ begin
+  perform ok((select duration from itinerary_entries where title = '新宿的飯店') = '到機場抓一小時',
+    '住宿也填得了預估時程（資料層不限 kind）');
+end $$;
+delete from itinerary_entries where title = '新宿的飯店';
+update itinerary_entries set duration = '約 1 小時半' where title = '新宿 → 鎌倉';
+
 delete from itinerary_entries where title = '自己打的夜景點';
 
 -- D1：勾完成時只同步自己的地點
@@ -652,6 +683,9 @@ update itinerary_entries set closed_days = '{sat}' where id = :'ref_entry';
 -- 觸發器是逐欄列舉的 UPDATE，沒列到就不會動到它 —— 這條斷言守的是
 -- 「哪天有人好心把 important 加進那串 set」。
 update itinerary_entries set important = true where id = :'ref_entry';
+-- v2.19.0：預估時程同理（只存在行程這一列，items 根本沒有這個欄位）。
+-- 順便釘住「引用清單的那種列也可以自己有值」—— 沒有 quoted_entry_has_no_* 那類約束。
+update itinerary_entries set duration = '走路 8 分' where id = :'ref_entry';
 -- 一列只能走到每個欄位的一個分支，所以再引用一筆專門走覆寫分支：
 -- ref_entry 的 title 與 station 都是空的（驗快照），這一筆兩個都有值（驗不被蓋掉）。
 -- 這一筆的 title 一定要跟被刪項目的不一樣，不然斷開後兩列的 title 會撞在一起，
@@ -697,6 +731,8 @@ do $$ begin
     'F-47：必去在斷開後原地保留（它不是「空的＝讀清單的」那種欄位）');
   perform ok((select important from itinerary_entries where title = '一蘭 新宿（早場）') = false,
     'F-47：沒標必去的那一筆也不會被斷開順手設成 true');
+  perform ok((select duration from itinerary_entries where title = '一蘭 新宿') = '走路 8 分',
+    'F-47：預估時程在斷開後原地保留（它不是「空的＝讀清單的」那種欄位）');
   perform ok((select title from itinerary_entries where title = '一蘭 新宿（早場）') = '一蘭 新宿（早場）',
     'F-47：這一列自己取的標題不會被被刪項目的標題蓋掉');
 end $$;
