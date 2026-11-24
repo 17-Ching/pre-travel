@@ -115,7 +115,7 @@ const print = () => window.print()
                 <span v-else class="w-10 shrink-0" />
                 <span class="min-w-0 flex-1">
                   <span v-if="timeOf(e)" class="mr-1.5 font-semibold tabular-nums">{{ timeOf(e) }}</span>
-                  <span class="font-semibold">{{ entryTitle(e) }}</span>
+                  <span class="font-semibold"><template v-if="e.important">★ </template>{{ entryTitle(e) }}</span>
                   <span v-if="entryStation(e)" class="ml-1.5 text-neutral-600">🚉 {{ entryStation(e) }}</span>
                   <span v-if="entryHours(e)" class="ml-1.5 text-neutral-600">🕒 {{ entryHours(e) }}</span>
                   <span v-if="e.note" class="block whitespace-pre-line text-neutral-600">{{ e.note }}</span>

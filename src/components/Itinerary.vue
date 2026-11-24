@@ -4,7 +4,7 @@ import { PhPlus, PhNote, PhCaretUp, PhCaretDown, PhCalendarBlank, PhTrash, PhPen
   PhArrowRight, PhArrowSquareOut, PhX, PhAirplaneTakeoff, PhBed, PhCopy, PhFilmSlate, PhFilePdf, PhClock, PhTrain } from '@phosphor-icons/vue'
 import { store, tripDays, entriesOf, flightsOf, staysOf, stayNights, stayDayLabel, addDays, daySummary,
   dayNote, dayLinks, dayRefs, setDayNote, addEntry, addEntries, updateEntry,
-  toggleEntryDone, reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
+  reorderEntries, moveEntry, deleteEntry, entryTitle, entryFromItem, scheduledSlots, toast,
   regionsOf, addRegion, user, me, tripMembers, item as findItem, tagColor, linkLabel, sourceLabel, thumbOf, imageOk, imageBroken, entryImages, entryHours, entryStation, hasOwnHours, linkify, openFile, setStatus } from '../store'
 import EntryCard from './EntryCard.vue'
 import Avatar from './Avatar.vue'
@@ -360,6 +360,12 @@ function doMove() {
   moveFor.value = null
   entryMenu.value = null
 }
+// 必去：只是行程這一筆的標記（同一間店排在兩天，可以只有一天是必去），不寫回清單
+// 卡片右上角的星星直接切，不用開抽屜
+function toggleImportant(e) {
+  if (store.offline) return toast('需要網路')
+  updateEntry(e, { important: !e.important })
+}
 function removeEntry() {
   const e = entryMenu.value
   if (!confirm(`從行程移除「${entryTitle(e)}」？`)) return
@@ -440,7 +446,7 @@ const addFor = ref(null)
       </div>
 
       <p class="text-[13px] tabular-nums text-muted">
-        <template v-if="summary.flight">航班 {{ summary.flight }} 班・</template>行程 {{ summary.schedule }} 項・餐食備選 {{ summary.meal }} 間・已完成 {{ summary.done }}
+        <template v-if="summary.flight">航班 {{ summary.flight }} 班・</template>行程 {{ summary.schedule }} 項・餐食備選 {{ summary.meal }} 間
       </p>
 
       <!-- 航班：出發日與回程日各一區。一天可以有好幾班，各自標誰搭 -->
@@ -454,7 +460,7 @@ const addFor = ref(null)
           </button>
         </div>
         <div v-if="flights.length" class="grid gap-2">
-          <EntryCard v-for="e in flights" :key="e.id" :entry="e" @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
+          <EntryCard v-for="e in flights" :key="e.id" :entry="e" @important="toggleImportant(e)" @menu="entryMenu = e" />
         </div>
         <button v-else class="w-full rounded-[12px] border border-dashed border-line py-3 text-[13px] text-muted"
           @click="openAdd('schedule', 'morning', 'flight')">＋ 加航班</button>
@@ -473,7 +479,7 @@ const addFor = ref(null)
         <div v-if="stays.length" class="grid gap-2">
           <EntryCard v-for="e in stays" :key="e.id" :entry="e"
             :badge="`${stayDayLabel(e, date)}・共 ${stayNights(e)} 晚`"
-            @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
+            @important="toggleImportant(e)" @menu="entryMenu = e" />
         </div>
         <button v-else class="w-full rounded-[12px] border border-dashed border-line py-3 text-[13px] text-muted"
           @click="openAdd('schedule', 'morning', 'stay')">＋ 加住宿</button>
@@ -545,7 +551,7 @@ const addFor = ref(null)
             </div>
             <div v-if="s.entries.length" class="grid gap-2">
               <template v-for="(e, i) in s.entries" :key="e.id">
-                <EntryCard :entry="e" @toggle="toggleEntryDone(e)" @menu="entryMenu = e" @add-leg="openTransportAfter(s.slot, e)" />
+                <EntryCard :entry="e" @important="toggleImportant(e)" @menu="entryMenu = e" @add-leg="openTransportAfter(s.slot, e)" />
                 <!-- 每個地點後面都能插一段交通，包含最後一筆 —— 早上的最後一個點到下午的
                      第一個點之間也要移動，那段就加在這個時段的尾巴。
                      已經有交通就不放（使用者反映整排虛線太吵）：下一筆是交通，或這筆本身就是交通。
@@ -584,7 +590,7 @@ const addFor = ref(null)
             </div>
             <div v-if="m.entries.length" class="grid gap-2">
               <EntryCard v-for="e in m.entries" :key="e.id" :entry="e"
-                @toggle="toggleEntryDone(e)" @menu="entryMenu = e" />
+                @important="toggleImportant(e)" @menu="entryMenu = e" />
             </div>
             <p v-else class="rounded-[12px] border border-dashed border-line py-2.5 text-center text-[12px] text-muted">還沒有候選</p>
           </div>
@@ -755,7 +761,12 @@ const addFor = ref(null)
       <p v-if="entryMenu && entryHours(entryMenu)" class="mb-2 flex items-start gap-1.5 px-3 text-[14px]">
         <PhClock :size="16" class="mt-0.5 shrink-0 text-muted" /><span class="whitespace-pre-line">{{ entryHours(entryMenu) }}</span>
       </p>
-      <p v-if="entryMenu?.note" class="mb-1 max-h-48 overflow-auto whitespace-pre-line border-b border-line px-3 pb-3 text-[14px] leading-relaxed text-muted"><span v-html="linkify(entryMenu.note)" /></p>
+      <!-- 備註做成醒目的便條（跟清單的地點詳情同一個樣子），重要事項才不會被看漏 -->
+      <!-- 不限高度：整段攤開，長的話跟著抽屜一起捲，不要框裡面再捲一層 -->
+      <div v-if="entryMenu?.note" class="mx-3 mb-2 rounded-[12px] border border-accent/35 border-l-4 border-l-accent bg-accent-soft p-3">
+        <p class="mb-1 flex items-center gap-1.5 text-[12px] font-semibold tracking-wide text-accent"><PhNote :size="15" weight="bold" />備註</p>
+        <p class="whitespace-pre-line text-[14px] leading-relaxed text-ink wrap-anywhere" v-html="linkify(entryMenu.note)" />
+      </div>
       <!-- 真的 <a>：手機上 Google Maps 連結要能跳到地圖 App（F-15） -->
       <div v-if="entryMenu?.links?.length" class="mb-1 border-b border-line pb-1">
         <a v-for="l in entryMenu.links" :key="l.id" :href="l.url" target="_blank" rel="noopener" class="row" @click="entryMenu = null">

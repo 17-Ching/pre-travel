@@ -87,8 +87,10 @@ const groups = computed(() => {
   // 送禮清單不分組：沒有地區與標籤，標題本身（送誰）就是整理的依據
   if (p.type === 'gift') return [{ key: 'all', name: '', items: filtered.value }].filter(keep)
   if (p.type !== 'reference') {
-    return [...regions.value.map(r => ({ key: r.id, name: r.name, items: filtered.value.filter(i => i.regionId === r.id) })),
-      { key: 'none', name: '未分類', items: filtered.value.filter(i => !i.regionId) }].filter(keep)
+    // 購物的「必買」（pinned_at）排在各地區的最前面，不另外拉成一組：要知道它在哪一區買
+    const list = p.type === 'shopping' ? [...filtered.value].sort((a, b) => Boolean(b.pinnedAt) - Boolean(a.pinnedAt)) : filtered.value
+    return [...regions.value.map(r => ({ key: r.id, name: r.name, items: list.filter(i => i.regionId === r.id) })),
+      { key: 'none', name: '未分類', items: list.filter(i => !i.regionId) }].filter(keep)
   }
   const names = (p.tags.length ? tagNames.value.filter(n => p.tags.includes(n)) : tagNames.value)
     .slice().sort((a, b) => a.localeCompare(b, 'zh-Hant'))
@@ -361,7 +363,7 @@ const tabCls = id => ['relative flex h-10 shrink-0 items-center gap-1.5 border-b
           <TransitionGroup v-show="isOpen(g)" tag="ul" name="list" class="relative grid gap-3">
             <li v-for="i in g.items" :key="i.id">
               <ItemCard :item="i" :editable="editable" :show-author="false"
-                @status="statusFor = i" @visited="setStatus(i, { visited: !i.visited })" @menu="itemMenu = i" />
+                @status="statusFor = i" @visited="setStatus(i, { visited: !i.visited })" @menu="itemMenu = i" @pin="togglePin(i)" />
             </li>
           </TransitionGroup>
         </section>

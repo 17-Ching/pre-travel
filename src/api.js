@@ -66,6 +66,7 @@ const toEntry = r => ({
   hours: Array.isArray(r.hours) ? r.hours : [], closedDays: closedDaysOf(r),
   station: r.station ?? '',
   detachedAt: r.detached_at,
+  important: Boolean(r.important),   // 必去（v2.18.0），卡片上會特別標出來
   createdBy: r.created_by, updatedBy: r.updated_by,
   createdAt: r.created_at, updatedAt: r.updated_at,
 })
@@ -97,6 +98,7 @@ const entryRow = e => ({
   files: filesRow(e.files),
   region_id: e.regionId || null,
   done: Boolean(e.done),
+  important: Boolean(e.important),
   sort_order: e.order ?? 0,
 })
 
@@ -391,6 +393,7 @@ export async function updateEntry(id, patch) {
   if ('station' in patch) row.station = (patch.station ?? '').trim().slice(0, 50)
   if ('kind' in patch) row.kind = patch.kind
   if ('done' in patch) row.done = patch.done
+  if ('important' in patch) row.important = Boolean(patch.important)
   if ('date' in patch) row.date = patch.date
   if ('endDate' in patch) row.end_date = patch.endDate || null
   if ('section' in patch) row.section = patch.section

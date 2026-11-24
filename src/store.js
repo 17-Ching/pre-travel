@@ -999,31 +999,8 @@ export function updateEntry(entry, patch) {
     () => Object.assign(entry, before))
 }
 
-// D1：勾完成時，若引用的是自己的地點就同步 visited。
-// 真正的寫入由資料庫觸發器做（換裝置、別人操作時也要成立），
-// 這裡只是把同一件事反映在本地，畫面才不用等重新整理。
-export function toggleEntryDone(entry) {
-  const done = !entry.done
-  const before = entry.done
-  entry.done = done
-  entry.updatedAt = now()
-  entry.updatedBy = store.me
-
-  const ref = entry.itemId ? item(entry.itemId) : null
-  const mirrors = Boolean(ref && ref.ownerUserId === store.me && ref.type === 'place')
-  const visitedBefore = ref?.visited
-  if (mirrors) ref.visited = done
-
-  if (store.offline) {
-    store.pending = store.pending.filter(p => !(p.kind === 'entry' && p.id === entry.id))
-      .concat({ kind: 'entry', id: entry.id, done })
-    return
-  }
-  push(() => api.updateEntry(entry.id, { done }), () => {
-    entry.done = before
-    if (mirrors) ref.visited = visitedBefore
-  })
-}
+// v2.18.0 拿掉了行程的「完成」勾勾（D1 同步 visited 的那支 toggleEntryDone 一起刪掉）。
+// 離線排隊重送裡 kind === 'entry' 那條還留著：更新前已經排進去的勾選照樣送得出去。
 
 export function reorderEntries(tripId, date, section, slot, orderedIds) {
   const before = new Map()

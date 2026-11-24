@@ -1,13 +1,14 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { PhMapPin, PhShoppingBag, PhGift, PhCheck, PhDotsThreeVertical, PhYoutubeLogo, PhInstagramLogo, PhThreadsLogo,
+import { PhMapPin, PhShoppingBag, PhGift, PhCheck, PhDotsThreeVertical, PhStar, PhYoutubeLogo, PhInstagramLogo, PhThreadsLogo,
   PhFacebookLogo, PhXLogo, PhLink, PhClock, PhTrain } from '@phosphor-icons/vue'
 import { store, isBuy, itemHours, user, sourceLabel, linkLabel, firstUrl, scheduledSlots, thumbOf, imageOk, imageBroken, ART } from '../store'
 import TagChip from './TagChip.vue'
 import Avatar from './Avatar.vue'
 
 const props = defineProps({ item: Object, editable: Boolean, showAuthor: Boolean })
-const emit = defineEmits(['status', 'visited', 'menu'])
+// pin：購物的「必買」星星。借用參考置頂的 pinned_at（有值＝必買），不另開欄位
+const emit = defineEmits(['status', 'visited', 'menu', 'pin'])
 
 // 連結預覽圖在儲存時就被轉存成第一張圖片了，這裡不用再管外部網址
 const thumb = computed(() => thumbOf(props.item.images[0]))
@@ -23,6 +24,7 @@ const source = computed(() => {
   return s && links.value.length > 1 ? `${s} +${links.value.length - 1}` : s
 })
 const STATUS = { todo: '未買', bought: '已買', not_found: '沒買到' }
+const mustBuy = computed(() => props.item.type === 'shopping' && Boolean(props.item.pinnedAt))
 
 // 參考（影片、貼文）。沒有狀態要勾，最重要的動作是「去看那支」，
 // 所以每個連結直接攤成一顆可以點的按鈕，不用先進詳情頁再找連結。
@@ -72,7 +74,8 @@ function fire(evt) {
     </div>
   </article>
 
-  <article v-else :class="['card flex gap-3 p-3 transition duration-200', done ? 'opacity-55' : 'shadow-e1']">
+  <!-- 必買：橘色框＋淡底，跟行程的「必去」同一個樣子 -->
+  <article v-else :class="['card flex gap-3 p-3 transition duration-200', mustBuy && '!border-accent/70 bg-accent-soft/50', done ? 'opacity-55' : 'shadow-e1']">
     <RouterLink :to="`/trips/${item.tripId}/items/${item.id}`" class="flex min-w-0 flex-1 gap-3">
       <div class="relative size-[88px] shrink-0">
         <img v-if="imageOk(thumb)" :src="thumb" alt="" loading="lazy" class="size-full rounded-[10px] bg-line object-cover" @error="imageBroken(thumb)" />
@@ -88,6 +91,9 @@ function fire(evt) {
       <div class="min-w-0 flex-1">
         <!-- wrap-anywhere：標題整串是網址時中間沒有可斷的地方，line-clamp 只會硬裁在半個字上。
              它只在一個字真的放不下時才斷，一般中英文標題的斷行不受影響 -->
+        <span v-if="mustBuy" class="mb-1 inline-flex items-center gap-0.5 rounded-md bg-accent px-1.5 py-0.5 text-[11px] font-bold text-accent-fg">
+          <PhStar :size="11" weight="fill" />必買
+        </span>
         <h3 :class="['line-clamp-2 text-[16px] font-semibold leading-[1.35] tracking-tight wrap-anywhere', item.status === 'bought' && 'line-through decoration-1']">{{ item.title }}</h3>
         <p v-if="item.plannedStore" class="mt-1 truncate text-[13px] font-medium text-accent">{{ item.plannedStore }}</p>
         <p v-if="item.type === 'place' && item.station" class="mt-1 flex items-center gap-1 text-[12px] text-muted"><PhTrain :size="13" class="shrink-0" /><span class="truncate">{{ item.station }}</span></p>
@@ -99,7 +105,8 @@ function fire(evt) {
           <span v-if="region" class="inline-flex h-[22px] items-center rounded-md bg-tint-soft px-1.5 text-[11px] font-medium text-tint">{{ region }}</span>
           <TagChip v-for="n in tags" :key="n" :name="n" />
         </div>
-        <p v-if="item.note" class="mt-2 line-clamp-2 whitespace-pre-line text-[13px] leading-relaxed text-muted">{{ item.note }}</p>
+        <!-- 備註：左邊一條強調色線、深色字，跟行程卡片同一個樣子 -->
+        <p v-if="item.note" class="mt-2 line-clamp-2 whitespace-pre-line border-l-2 border-accent pl-2 text-[13px] leading-relaxed text-ink">{{ item.note }}</p>
         <div v-if="showAuthor" class="mt-2 flex items-center gap-1.5 text-[12px] text-muted">
           <Avatar :user="user(item.createdBy)" :size="16" />{{ user(item.createdBy)?.name }} 新增
         </div>
@@ -108,11 +115,19 @@ function fire(evt) {
 
     <div class="flex flex-col items-end gap-1.5">
       <template v-if="editable">
-        <button v-if="isBuy(item.type)" :class="[popping && 'pop',
+        <!-- 購物：必買星星跟已買／未買並排在同一行 -->
+        <div v-if="isBuy(item.type)" class="flex items-center gap-1.5">
+        <button v-if="item.type === 'shopping'" :aria-label="mustBuy ? '取消必買' : '標為必買'" :aria-pressed="mustBuy" @click="$emit('pin')"
+          :class="['flex size-8 items-center justify-center rounded-full border transition-colors duration-150',
+            mustBuy ? 'border-transparent bg-accent text-accent-fg' : 'border-line text-muted']">
+          <PhStar :size="16" :weight="mustBuy ? 'fill' : 'regular'" />
+        </button>
+        <button :class="[popping && 'pop',
           'h-8 rounded-full border px-3 text-[13px] font-semibold whitespace-nowrap transition-colors duration-150',
           item.status === 'bought' ? 'border-transparent bg-accent-soft text-accent'
           : item.status === 'not_found' ? 'border-transparent bg-line text-muted' : 'border-line text-ink']"
           @click="fire('status')">{{ STATUS[item.status] }}</button>
+        </div>
         <button v-else :class="[popping && 'pop',
           'flex size-9 items-center justify-center rounded-full border transition-colors duration-150',
           item.visited ? 'border-transparent bg-accent text-accent-fg' : 'border-line text-muted']"

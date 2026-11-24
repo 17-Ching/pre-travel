@@ -1,13 +1,14 @@
 <script setup>
 import { computed } from 'vue'
-import { PhCheck, PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip, PhClock, PhTrain } from '@phosphor-icons/vue'
+import { PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip, PhClock, PhTrain, PhStar } from '@phosphor-icons/vue'
 import { store, item, entryHours, entryStation, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
 // badge：住宿用來標「入住 / 第 2 晚 / 退房・共 3 晚」，由呼叫端算好（它才知道現在看的是哪天）
 const props = defineProps({ entry: Object, badge: String })
 // add-leg：交通那條最右邊的小加號，在它後面再接一段（轉乘）
-defineEmits(['toggle', 'menu', 'add-leg'])
+// important：右上角的星星，一鍵標／取消必去（取代原本的「完成」勾勾，實際用不到）
+defineEmits(['important', 'menu', 'add-leg'])
 
 const title = computed(() => entryTitle(props.entry))
 const thumb = computed(() => entryThumb(props.entry))
@@ -86,12 +87,14 @@ const timeLabel = computed(() => {
 
   <article v-else :class="['relative flex gap-2.5 rounded-[14px] border p-2.5 transition duration-200',
     // F-39：交通用左側直線 + 不同底色，跟一般行程項目明顯區隔
-    isTransport ? 'border-dashed border-tint/50 bg-tint-soft/40' : 'border-line bg-card',
-    entry.done ? 'opacity-55' : 'shadow-e1']">
+    // 必去：強調色外框＋淡淡的底色，一整排卡片裡一眼就跳出來
+    // 「完成」勾勾拿掉了，舊資料勾過的也不再變淡、不畫刪除線（沒有地方能取消）
+    isTransport ? 'border-dashed border-tint/50 bg-tint-soft/40' : entry.important ? 'border-accent/70 bg-accent-soft/50' : 'border-line bg-card',
+    'shadow-e1']">
     <!-- 交通的左側直線 -->
     <span v-if="isTransport" aria-hidden="true" class="absolute inset-y-3 left-0 w-0.5 rounded-full bg-tint" />
 
-    <!-- 卡片本身就是開抽屜的按鈕，不必瞄準右邊那三個點；勾選鈕在外面，不會被誤觸 -->
+    <!-- 卡片本身就是開抽屜的按鈕，不必瞄準右邊那三個點；必去的星星在外面，不會被誤觸 -->
     <button type="button" class="flex min-w-0 flex-1 gap-2.5 text-left" :aria-label="`${title} 的動作`" @click="$emit('menu')">
       <span v-if="isTransport" class="flex size-11 shrink-0 items-center justify-center rounded-[10px] bg-tint/15 text-tint">
         <component :is="isFlight ? PhAirplaneTakeoff : isStay ? PhBed : PhArrowRight" :size="20" weight="bold" />
@@ -105,6 +108,9 @@ const timeLabel = computed(() => {
       </span>
 
       <span class="min-w-0 flex-1">
+        <span v-if="entry.important && !isTransport" class="mb-1 mr-1.5 inline-flex items-center gap-0.5 rounded-md bg-accent px-1.5 py-0.5 text-[11px] font-bold text-accent-fg">
+          <PhStar :size="11" weight="fill" />必去
+        </span>
         <!-- 時間徽章放標題上面，掃一眼就知道哪幾筆有約定時間 -->
         <span v-if="badge" class="mb-1 mr-1.5 inline-flex items-center rounded-md bg-tint-soft px-1.5 py-0.5 text-[11px] font-bold text-tint">
           {{ badge }}
@@ -114,7 +120,7 @@ const timeLabel = computed(() => {
           {{ timeLabel }}
         </span>
         <span v-if="region" class="mb-1 inline-flex items-center rounded-md bg-tint-soft px-1.5 py-0.5 text-[11px] font-medium text-tint">{{ region }}</span>
-        <span :class="['line-clamp-2 text-[15px] font-semibold leading-snug wrap-anywhere', entry.done && 'line-through decoration-1']">{{ title }}</span>
+        <span class="line-clamp-2 text-[15px] font-semibold leading-snug wrap-anywhere">{{ title }}</span>
         <span v-if="isTransport && entry.transportMode" class="mt-0.5 block truncate text-[12px] text-tint">{{ entry.transportMode }}</span>
         <span v-if="isTransport && attachments" class="mt-0.5 flex items-center gap-1 text-[11px] text-muted"><PhPaperclip :size="12" />{{ attachments }} 個附件</span>
         <!-- 同一天好幾班時，靠這排頭像分辨誰搭哪一班 -->
@@ -130,17 +136,19 @@ const timeLabel = computed(() => {
         <span v-if="!isTransport && entryHours(entry)" class="mt-1 flex items-center gap-1 text-[11px] text-muted">
           <PhClock :size="12" class="shrink-0" /><span class="truncate">{{ entryHours(entry) }}</span>
         </span>
-        <span v-if="entry.note" class="mt-1 line-clamp-2 whitespace-pre-line text-[12px] leading-relaxed text-muted">{{ entry.note }}</span>
+        <!-- 備註：左邊一條強調色線、深色字，卡片上一眼看得出「這裡有寫東西」 -->
+        <span v-if="entry.note" class="mt-1.5 line-clamp-2 whitespace-pre-line border-l-2 border-accent pl-2 text-[12px] leading-relaxed text-ink">{{ entry.note }}</span>
         <!-- F-47：引用的地點被刪掉了，標題留成快照 -->
         <span v-if="detached" class="mt-1 block text-[11px] text-muted">原項目已刪除</span>
       </span>
     </button>
 
     <div class="flex shrink-0 flex-col items-end gap-1">
-      <button :aria-label="entry.done ? '取消完成' : '標記完成'" @click="$emit('toggle')"
+      <!-- 必去只給地點（航班、住宿不需要），一鍵切換不用打開抽屜 -->
+      <button v-if="!isTransport" :aria-label="entry.important ? '取消必去' : '標為必去'" :aria-pressed="!!entry.important" @click="$emit('important')"
         :class="['flex size-8 items-center justify-center rounded-full border transition-colors duration-150',
-          entry.done ? 'border-transparent bg-accent text-accent-fg' : 'border-line text-muted']">
-        <PhCheck :size="16" weight="bold" />
+          entry.important ? 'border-transparent bg-accent text-accent-fg' : 'border-line text-muted']">
+        <PhStar :size="16" :weight="entry.important ? 'fill' : 'regular'" />
       </button>
       <button class="icon-btn size-8 text-muted" aria-label="更多動作" @click="$emit('menu')">
         <PhDotsThreeVertical :size="16" weight="bold" />

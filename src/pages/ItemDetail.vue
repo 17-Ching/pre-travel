@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { PhPencilSimple, PhTrash, PhCopy, PhArrowSquareOut, PhCheck, PhMapPin, PhShoppingBag, PhGift } from '@phosphor-icons/vue'
+import { PhPencilSimple, PhTrash, PhCopy, PhArrowSquareOut, PhCheck, PhMapPin, PhShoppingBag, PhGift, PhNote } from '@phosphor-icons/vue'
 import { store, isBuy, linkify, itemHours, item as getItem, user, setStatus, deleteItem, copyItem, toast, fmtDateTime, linkLabel, sourceLabel, imageOk, imageBroken, ART } from '../store'
 import TopBar from '../components/TopBar.vue'
 import Avatar from '../components/Avatar.vue'
@@ -121,6 +121,12 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
           </a>
         </div>
 
+        <!-- 備註常是重要事項（幾點要排隊、要先預約），做成一張醒目的便條，放在其他資訊上面 -->
+        <div v-if="it.note" class="mt-5 rounded-[12px] border border-accent/35 border-l-4 border-l-accent bg-accent-soft p-3">
+          <p class="mb-1 flex items-center gap-1.5 text-[12px] font-semibold tracking-wide text-accent"><PhNote :size="15" weight="bold" />備註</p>
+          <p class="whitespace-pre-line text-[15px] leading-relaxed text-ink wrap-anywhere" v-html="linkify(it.note)" />
+        </div>
+
         <dl class="mt-5 grid gap-3 text-[15px]">
           <div v-if="region" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">地區</dt><dd>{{ region }}</dd></div>
           <div v-if="tags.length" class="flex gap-4"><dt class="w-20 shrink-0 text-muted">標籤</dt><dd class="flex flex-wrap gap-1"><TagChip v-for="n in tags" :key="n" :name="n" /></dd></div>
@@ -142,8 +148,6 @@ const STATUS = [['todo', '未買'], ['bought', '已買'], ['not_found', '沒買�
             </dd>
           </div>
         </dl>
-
-        <p v-if="it.note" class="mt-5 whitespace-pre-line text-[15px] leading-relaxed" v-html="linkify(it.note)" />
 
         <p class="mt-6 flex items-center gap-1.5 text-[13px] text-muted">
           <Avatar :user="user(it.createdBy)" :size="18" />{{ user(it.createdBy)?.name }} 於 {{ fmtDateTime(it.createdAt) }} 新增
