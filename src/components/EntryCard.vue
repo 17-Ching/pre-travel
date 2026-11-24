@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip, PhClock, PhTrain, PhStar } from '@phosphor-icons/vue'
+import { PhDotsThreeVertical, PhArrowRight, PhMapPin, PhAirplaneTakeoff, PhBed, PhPlus, PhPaperclip, PhClock, PhTrain, PhStar, PhHourglassMedium } from '@phosphor-icons/vue'
 import { store, item, entryHours, entryStation, entryTitle, entryThumb, entryDetached, sourceLabel, firstUrl, arrivesNextDay, user, imageOk, imageBroken } from '../store'
 import Avatar from './Avatar.vue'
 
@@ -72,8 +72,9 @@ const timeLabel = computed(() => {
           <span v-if="entry.transportMode" class="text-[13px] font-semibold text-tint">{{ entry.transportMode }}</span>
           <span class="min-w-0 truncate text-[13px]">{{ title }}</span>
           <span v-if="timeLabel" class="text-[11px] font-medium tabular-nums text-muted">{{ timeLabel }}</span>
+          <span v-if="entry.duration" class="inline-flex items-center gap-0.5 text-[11px] font-medium text-muted"><PhHourglassMedium :size="11" />{{ entry.duration }}</span>
         </span>
-        <span v-if="entry.note" class="mt-0.5 line-clamp-1 block text-[12px] text-muted">{{ entry.note }}</span>
+        <span v-if="entry.note" class="mt-0.5 line-clamp-1 text-[12px] text-muted">{{ entry.note }}</span>
       </span>
     </button>
     <!-- 整條本身就是開抽屜的按鈕，不另放「⋯」，右邊只留接下一段的加號 -->

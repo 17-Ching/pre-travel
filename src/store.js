@@ -933,7 +933,7 @@ function buildEntry(d, order) {
     itemId: d.itemId ?? null,
     title: (d.title ?? '').trim(),
     links: d.links ?? [],
-    transportMode: d.transportMode ?? '',
+    transportMode: d.transportMode ?? '', duration: d.duration ?? '',
     startTime: d.startTime ?? '', endTime: d.endTime ?? '',
     note: d.note ?? '', passengerIds: d.passengerIds ?? [], images: d.images ?? [], files: d.files ?? [], regionId: d.regionId ?? null, hours: d.hours ?? [], closedDays: d.closedDays ?? [], station: d.station ?? '', done: false, order,
     detachedAt: null,

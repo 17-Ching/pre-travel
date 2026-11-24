@@ -108,7 +108,7 @@ const print = () => window.print()
             <li v-for="e in s.entries" :key="e.id" class="flex gap-2.5">
               <template v-if="e.kind === 'transport'">
                 <span class="w-10 shrink-0 text-center text-neutral-500">↓</span>
-                <span class="text-neutral-600">{{ e.transportMode }}<span v-if="e.transportMode && e.title">・</span>{{ e.title }}<span v-if="timeOf(e)" class="tabular-nums">・{{ timeOf(e) }}</span></span>
+                <span class="text-neutral-600">{{ e.transportMode }}<span v-if="e.transportMode && e.title">・</span>{{ e.title }}<span v-if="timeOf(e)" class="tabular-nums">・{{ timeOf(e) }}</span><span v-if="e.duration">・⏳{{ e.duration }}</span></span>
               </template>
               <template v-else>
                 <img v-if="imageOk(entryThumb(e))" :src="entryThumb(e)" alt="" class="size-10 shrink-0 rounded object-cover" />

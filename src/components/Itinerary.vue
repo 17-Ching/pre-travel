@@ -113,7 +113,7 @@ const addNoteDesc = d => (noteDraft.value = (noteDraft.value ? noteDraft.value +
 // ── 新增 / 編輯行程項目（F-38、F-39）
 // 航班的標題是「出發地 → 抵達地」，拆成兩格填：箭頭在電腦上很難打（使用者回報）
 const ARROW = ' → '
-const blank = kind => ({ title: '', kind, transportMode: '', startTime: '', endTime: '', note: '', links: [],
+const blank = kind => ({ title: '', kind, transportMode: '', duration: '', startTime: '', endTime: '', note: '', links: [],
   passengerIds: [], images: [], files: [], regionId: '', hours: [], closedDays: [], station: '', startDate: '', endDate: '', from: '', to: '' })
 const form = ref(blank('place'))
 const formFor = ref(null)   // { slot, section } 新增；或 { entry } 編輯
@@ -136,7 +136,7 @@ function openEdit(entry) {
   const arrowAt = isRouteKind ? entry.title.indexOf('→') : -1
   const from = !isRouteKind ? '' : arrowAt < 0 ? entry.title.trim() : entry.title.slice(0, arrowAt).trim()
   const to = arrowAt < 0 ? '' : entry.title.slice(arrowAt + 1).trim()
-  form.value = { title: entryTitle(entry), kind: entry.kind, transportMode: entry.transportMode || '',
+  form.value = { title: entryTitle(entry), kind: entry.kind, transportMode: entry.transportMode || '', duration: entry.duration || '',
     startTime: entry.startTime || '', endTime: entry.endTime || '', note: entry.note || '',
     links: JSON.parse(JSON.stringify(entry.links ?? [])), passengerIds: [...(entry.passengerIds ?? [])],
     images: JSON.parse(JSON.stringify(entry.images ?? [])), files: JSON.parse(JSON.stringify(entry.files ?? [])), regionId: entry.regionId ?? '',
@@ -205,6 +205,7 @@ function submitForm() {
   const f = form.value, ctx = formFor.value
   const patch = {
     kind: f.kind, transportMode: f.kind === 'place' ? '' : f.transportMode.trim(),
+    duration: f.kind === 'transport' ? f.duration.trim() : '',
     startTime: f.startTime || null, endTime: f.endTime || null, note: f.note.trim(),
     links: f.links.filter(l => l.url.trim()),
     passengerIds: f.kind === 'flight' ? [...f.passengerIds] : [],
@@ -669,6 +670,11 @@ const addFor = ref(null)
           <div class="mt-2 flex flex-wrap gap-1.5">
             <button v-for="m in MODES" :key="m" class="chip-state" @click="form.transportMode = m">{{ m }}</button>
           </div>
+        </div>
+        <!-- 預估時程：自由填，「約 25 分」「1 小時半」都行，不硬算成分鐘 -->
+        <div v-if="form.kind === 'transport'">
+          <label class="label" for="e-dur">預估時程（選填）</label>
+          <input id="e-dur" v-model="form.duration" class="input" maxlength="20" placeholder="例：約 25 分" />
         </div>
 
         <!-- 同行的人可能搭不同班，所以每一班各自標誰搭；不選＝全員 -->

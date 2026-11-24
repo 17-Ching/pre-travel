@@ -57,6 +57,7 @@ const toEntry = r => ({
   id: r.id, tripId: r.trip_id, date: r.date, endDate: r.end_date, section: r.section, slot: r.slot,
   kind: r.kind, itemId: r.item_id, title: r.title ?? '',
   transportMode: r.transport_mode ?? '',
+  duration: r.duration ?? '',   // 交通的預估時程（v2.19.0），自由文字
   startTime: hhmm(r.start_time), endTime: hhmm(r.end_time),
   links: r.links ?? [], note: r.note ?? '', done: r.done, order: r.sort_order,
   passengerIds: r.passenger_ids ?? [],
@@ -90,6 +91,7 @@ const entryRow = e => ({
   title: (e.title ?? '').slice(0, 100),
   links: (e.links ?? []).filter(l => l.url?.trim()),
   transport_mode: (e.transportMode ?? '').slice(0, 30),
+  duration: (e.duration ?? '').slice(0, 20),
   start_time: e.startTime || null,
   end_time: e.endTime || null,
   note: (e.note ?? '').slice(0, 2000),
@@ -380,6 +382,7 @@ export async function updateEntry(id, patch) {
   const row = {}
   if ('title' in patch) row.title = (patch.title ?? '').slice(0, 100)
   if ('transportMode' in patch) row.transport_mode = (patch.transportMode ?? '').slice(0, 30)
+  if ('duration' in patch) row.duration = (patch.duration ?? '').slice(0, 20)
   if ('startTime' in patch) row.start_time = patch.startTime || null
   if ('endTime' in patch) row.end_time = patch.endTime || null
   if ('links' in patch) row.links = (patch.links ?? []).filter(l => l.url?.trim())
