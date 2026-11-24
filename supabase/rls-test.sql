@@ -577,6 +577,44 @@ select denied(
   '只有航班與住宿能附 PDF');
 delete from itinerary_entries where title = '桃園 → 成田';
 
+-- v2.18.0 必去：成員設得起來也取消得掉
+do $$ begin
+  perform ok((select important from itinerary_entries where title = '自己打的夜景點') = false,
+    '必去預設是 false，不是 null');
+end $$;
+update itinerary_entries set important = true where title = '自己打的夜景點';
+do $$ begin
+  perform ok((select important from itinerary_entries where title = '自己打的夜景點'),
+    '成員可以把行程標成必去');
+end $$;
+update itinerary_entries set important = false where title = '自己打的夜景點';
+do $$ begin
+  perform ok((select important from itinerary_entries where title = '自己打的夜景點') = false,
+    '必去可以取消');
+end $$;
+-- 不限 kind（理由見 schema.sql 建表那段）：畫面只給地點切換，但資料層不擋，
+-- 免得之後想標「這間飯店一定要住到」時要再改一次 schema。
+insert into itinerary_entries (trip_id, date, section, slot, kind, title, end_date, important, created_by)
+values (:'trip_id', '2026-11-13', 'schedule', 'morning', 'stay', '新宿的飯店',
+        '2026-11-14', true, :'ruby');
+do $$ begin
+  perform ok((select important from itinerary_entries where title = '新宿的飯店'),
+    '住宿也標得起來（資料層不限 kind）');
+end $$;
+delete from itinerary_entries where title = '新宿的飯店';
+-- 引用清單的那種列也可以自己有值：必去是「這一筆行程」的標記，不是地點的屬性，
+-- 所以同一間店排在兩天可以只有一天是必去 —— 不套 quoted_entry_has_no_* 那類約束
+insert into itinerary_entries (trip_id, date, section, slot, item_id, important, created_by)
+values (:'trip_id', '2026-11-13', 'schedule', 'evening', :'jean_item', true, :'ruby');
+do $$ begin
+  perform ok((select important from itinerary_entries
+              where item_id is not null and important) = true,
+    '引用清單的行程也可以自己標必去（不寫回 items）');
+  perform ok((select count(*) from itinerary_entries where item_id = (select id from items where title = '一蘭 新宿')) = 2,
+    '同一個清單項目可以被引用兩次，各自有自己的必去狀態');
+end $$;
+delete from itinerary_entries where item_id is not null and important;
+
 delete from itinerary_entries where title = '自己打的夜景點';
 
 -- D1：勾完成時只同步自己的地點
@@ -609,6 +647,11 @@ update items set hours = '[{"open":"11:00","close":"23:00"}]'::jsonb,
                  station = '東京 Metro 新宿三丁目站'
 where id = :'jean_item';
 update itinerary_entries set closed_days = '{sat}' where id = :'ref_entry';
+-- v2.18.0：必去跟上面那些「空的＝讀清單的」欄位不一樣，它從頭到尾只存在
+-- 行程這一列，沒有第二個來源，所以斷開時要**原地不動**，不是補快照。
+-- 觸發器是逐欄列舉的 UPDATE，沒列到就不會動到它 —— 這條斷言守的是
+-- 「哪天有人好心把 important 加進那串 set」。
+update itinerary_entries set important = true where id = :'ref_entry';
 -- 一列只能走到每個欄位的一個分支，所以再引用一筆專門走覆寫分支：
 -- ref_entry 的 title 與 station 都是空的（驗快照），這一筆兩個都有值（驗不被蓋掉）。
 -- 這一筆的 title 一定要跟被刪項目的不一樣，不然斷開後兩列的 title 會撞在一起，
@@ -650,6 +693,10 @@ do $$ begin
     'F-47：沿用清單的最近車站在斷開時有留下快照');
   perform ok((select station from itinerary_entries where title = '一蘭 新宿（早場）') = '都營 新宿站',
     'F-47：這一列自己覆寫的最近車站不會被被刪項目的值蓋掉');
+  perform ok((select important from itinerary_entries where title = '一蘭 新宿') = true,
+    'F-47：必去在斷開後原地保留（它不是「空的＝讀清單的」那種欄位）');
+  perform ok((select important from itinerary_entries where title = '一蘭 新宿（早場）') = false,
+    'F-47：沒標必去的那一筆也不會被斷開順手設成 true');
   perform ok((select title from itinerary_entries where title = '一蘭 新宿（早場）') = '一蘭 新宿（早場）',
     'F-47：這一列自己取的標題不會被被刪項目的標題蓋掉');
 end $$;
@@ -664,6 +711,12 @@ select denied(
   format('insert into itinerary_entries (trip_id, date, section, slot, title, created_by) values (%L, %L, %L, %L, %L, %L)',
          :'trip_id', '2026-11-13', 'schedule', 'morning', '亂塞', :'kai'),
   '非成員不能寫入行程');
+-- v2.18.0：必去沒有自己的 policy，靠的是 itinerary_entries_update 的成員檢查。
+-- 哪天那條 using 被放寬，這裡會先叫。UPDATE 被 RLS 濾掉是靜默的（影響 0 筆），
+-- 所以用 denied() 看實際影響筆數。
+select denied(
+  'update itinerary_entries set important = true',
+  '非成員不能把別人的行程標成必去');
 
 -- 交回 Ruby，下面幾段驗的是「一般成員能做什麼」
 set app.uid = '22222222-2222-2222-2222-222222222222';

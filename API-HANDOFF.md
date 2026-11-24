@@ -118,7 +118,7 @@ id 由前端用 `crypto.randomUUID()` 產生再送上去，兩邊才指向同一
 
 ### 3.1 驗證方式
 
-[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 181 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
+[`supabase/rls-test.sql`](supabase/rls-test.sql) 有 190 項斷言，以兩個不同使用者的身分實際讀寫，涵蓋他人分頁唯讀、標籤成員看得到但只有本人能改、非成員完全看不到、刪地區不連帶刪項目、行程權限、slot 組合限制、D1 連動的兩種情況、F-47 的斷開行為等。
 
 ```bash
 psql -f supabase/rls-test.sql
@@ -183,6 +183,8 @@ PostgreSQL 對 UPDATE 會把 SELECT 政策也套用在新列上，而 `trips_sel
 `itinerary_entries` 的 `title`、`hours`、`closed_days`、`station` 都是這個規則：空的就讀 `items` 的值，有值就是這一列自己覆寫。清單項目被刪掉時，空的那些會瞬間失去來源，所以 [`detach_itinerary_on_item_delete`](supabase/schema.sql) 要把被刪項目的值填進去。**再加這類欄位時要一起改這支觸發器**，漏掉的話是標題留著、那一欄默默消失，不報錯。
 
 欄位從純量換成陣列時，快照那一行的「空的」判斷也要跟著換（v2.15.1 的 `closed_day` → `closed_days` 是 `coalesce(...)` 換成 `cardinality(...) > 0`）。這裡沿用 `coalesce` 不會報錯但永遠成立，因為 `closed_days` 是 `not null`，等於快照整個失效。
+
+**反過來說，不是每個新欄位都該加進那支觸發器。** 判準是「這一欄空的時候，值是不是來自 `items`」。`important`（v2.18.0）從頭到尾只存在行程這一列，沒有第二個來源，所以斷開時要**原地不動** —— 那支觸發器是逐欄列舉的 UPDATE，沒列到就自然不動，什麼都不用做。好心把它加進 set 清單反而會把使用者標的必去清掉。rls-test 兩個方向都有斷言。
 
 寫斷言時注意**一列只能走到每個欄位的一個分支**（空的→補快照、有值→保留）。rls-test 用兩筆引用同一個項目的行程各走一邊，而且第二筆一定要有自己的 `title` —— 不然斷開後兩列的標題都會變成被刪項目的標題，`where title = ...` 的斷言會一次撈到兩列。
 
@@ -394,7 +396,12 @@ supabase/
                         只加欄位不用補表的 GRANT；新函式吃得到 PUBLIC 的預設
                         EXECUTE，還是明寫一份（見第 4 節的理由）。
                         不做回填，所以不碰 touch 觸發器那個坑。可重複執行
-  rls-test.sql        權限驗證，181 項。跑在用完就丟的本機 Postgres
+  migrate-v2-18.sql   itinerary_entries 加 important（v2.18.0，行程標必去）。
+                        只加一個有預設值的欄位：RLS 不動、GRANT 不用補、
+                        不用回填、不碰 touch 觸發器。不限 kind 也不加
+                        quoted_entry 類約束，理由見 schema.sql 建表那段。
+                        F-47 斷開時原地保留，觸發器不用改。可重複執行
+  rls-test.sql        權限驗證，190 項。跑在用完就丟的本機 Postgres
 scripts/check.mjs     純函式自我檢查
 src/
   supabase.js         client、帳號密碼登入、簽名網址

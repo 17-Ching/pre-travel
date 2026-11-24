@@ -268,6 +268,15 @@ create table if not exists public.itinerary_entries (
   -- 地區被刪掉只是變成沒有地區，不會連帶刪掉行程那筆
   region_id      uuid references public.regions on delete set null,
   done           boolean not null default false,
+  -- v2.18.0：必去。這是**行程這一筆**的標記，不是地點的屬性 ——
+  -- 同一間店排在兩天，可以只有一天是必去，所以不寫回 items，引用清單的那種列
+  -- 也可以自己有值（不需要 quoted_entry_has_no_* 那類約束）。
+  --
+  -- 不限 kind。畫面目前只有 kind = 'place' 提供切換，但限制 kind 等於把前端今天的
+  -- 版面寫死在資料庫裡 —— 理由同 items.pinned_at 與 items.hours。之後想標
+  -- 「這間飯店一定要住到」或「這班車絕對不能錯過」就得再改一次 schema，
+  -- 而擋下來的代價是整筆存檔失敗，比畫面上多一個用不到的旗標嚴重得多。
+  important      boolean not null default false,
   sort_order     int not null default 0,
   created_by     uuid not null references public.profiles on delete cascade,
   updated_by     uuid references public.profiles on delete set null,
@@ -391,6 +400,8 @@ alter table public.itinerary_entries add constraint itinerary_entries_closed_day
 alter table public.itinerary_entries drop constraint if exists itinerary_entries_closed_days_none_alone;
 alter table public.itinerary_entries add constraint itinerary_entries_closed_days_none_alone
   check (not ('none' = any(closed_days)) or cardinality(closed_days) = 1);
+-- 必去（v2.18.0）。舊資料吃預設值 false，不用回填。不限 kind，理由見建表那段。
+alter table public.itinerary_entries add column if not exists important boolean not null default false;
 -- 翻某一天時要一起撈出「涵蓋這天」的住宿
 create index if not exists itinerary_stay_idx on public.itinerary_entries (trip_id, kind, date, end_date);
 
